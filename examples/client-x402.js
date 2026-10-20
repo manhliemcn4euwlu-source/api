@@ -43,6 +43,7 @@
 // resolved the same way instead of being reported as an error.
 'use strict';
 const N = require('nanocurrency');
+const { reapDeadHolder } = require('./wallet-lock-reaper');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 
 // Mirror of @x402/core's ResourceInfoSchema caps (2.25.0), kept dependency-free. Returns '' when fine, else what is wrong.
@@ -94,13 +95,19 @@ async function work(hash, origin) {
   return N.computeWork(hash, { workThreshold: 'fffffff800000000' });
 }
 
-// The per-account lock (see the header). A file created with O_EXCL under NANO_LOCK_DIR holding "pid startMs": the create
-// is atomic, so one process wins. Only a valid positive PID whose process is gone is stale; its file is removed only
-// if it still reads as that same holder, then the loop tries again. An empty or invalid-PID record may belong to a
-// holder still writing it: wait up to NANO_LOCK_WAIT_MS without removing it, then refuse for manual inspection.
-// A live holder is never taken over: at NANO_LOCK_MAX_MS the
-// waiter refuses with exit 5 so an operator can investigate the holder. Released when this process exits, by which time the fate of its block has been
-// printed; a seller that serves before confirmation leaves the next writer's block in the "not confirmed yet" loop below.
+// The per-account lock (see the header). A file created with O_EXCL under
+// NANO_LOCK_DIR holds "pid startMs". Only a proven gone PID (ESRCH) is stale.
+// Unlike a plain read/compare/unlink, an exclusive '.reaper' *file* now
+// serialises dead-record reclamation across simultaneous local waiters.
+// A pre-existing/orphaned gate is NEVER removed or expired automatically:
+// the waiter polls up to NANO_LOCK_WAIT_MS then refuses unsigned, naming both
+// files and the manual recovery procedure. Gate creation/recheck/unlink are
+// synchronous, with no network, sleep or signing inside that critical section.
+// Empty/truncated/nonpositive-PID records also refuse without removal because
+// an O_EXCL holder might still be publishing its record. PID reuse and
+// cross-host locking remain outside this cooperative local-file protocol.
+// A live holder is never taken over: at NANO_LOCK_MAX_MS the waiter refuses
+// with exit 5 so an operator can investigate the holder. Released on exit.
 function walletLock(account) {
   if (process.env.NANO_LOCK === '0') return Promise.resolve();
   const file = path.join(process.env.NANO_LOCK_DIR || os.tmpdir(), 'pursekeeper-wallet-' + account + '.lock');
@@ -128,8 +135,27 @@ function walletLock(account) {
         continue;
       }
       if (!alive(pid)) {
-        console.error('wallet lock on ' + account + ' is stale (its process is gone); taking it over');
-        try { if (fs.readFileSync(file, 'utf8') === holder) fs.unlinkSync(file); } catch { /* removed by another waiter */ }
+        // Without the gate C can erase B's newly published live lock after B
+        // removes the original dead holder H. No network/sleep under the gate.
+        const result = reapDeadHolder(file, holder, () => !alive(pid));
+        if (result.state === 'busy') {
+          if (Date.now() - start >= waitMs) {
+            console.error('refusing: wallet stale-reaper gate at ' + result.gate +
+              ' blocked reclamation of lock file ' + file +
+              ' until NANO_LOCK_WAIT_MS. Nothing signed. Neither file was removed. ' +
+              'Check all running clients for this wallet and manually delete an orphaned gate file only when no reaper is active.');
+            process.exit(5);
+          }
+          if (!told) {
+            console.error('waiting for exclusive wallet stale-reaper gate at ' +
+              result.gate + ' beside lock ' + file + '; refusing to steal it');
+            told = true;
+          }
+          await new Promise(s => setTimeout(s, 150 + Math.random() * 150));
+          continue;
+        }
+        if (result.state === 'removed')
+          console.error('wallet lock on ' + account + ' is stale (its process is gone); taking it over');
         continue;
       }
       if (!(age < maxMs)) {

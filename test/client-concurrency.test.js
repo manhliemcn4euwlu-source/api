@@ -169,6 +169,62 @@ test('a stale holder is taken over only when its process is gone', async () => {
 });
 
 
+test('three simultaneous waiters on one dead account record serialize reclamation and each mock purchase', async () => {
+  const m = await mock(); const dir = tmp();
+  const gone = spawn(process.execPath, ['-e', '']);
+  await new Promise(resolve => gone.on('close', resolve));
+  fs.writeFileSync(lockFile(dir), gone.pid + ' ' + Date.now());
+  const rs = await Promise.all(Array.from({length:3}, () => run(m.origin,dir)));
+  await m.close();
+  assert.deepEqual(rs.map(r=>r.code),[0,0,0],rs.map(r=>r.err).join('\n---\n'));
+  assert.equal(m.state.served,3);
+  assert.equal(m.state.refused,0);
+  assert.equal(m.state.landed,3);
+  assert.equal(fs.existsSync(lockFile(dir)),false);
+  assert.equal(fs.existsSync(lockFile(dir)+'.reaper'),false);
+});
+
+test('pre-existing stale reaper FILE beside dead holder blocks the real client unsigned', { timeout: 15000 }, async t => {
+  const m = await mock(), dir = tmp(), file = lockFile(dir);
+  const gone = spawn(process.execPath, ['-e', '']);
+  await new Promise(resolve => gone.on('close', resolve));
+  const oldHolder = gone.pid + ' ' + Date.now();
+  fs.writeFileSync(file, oldHolder);
+  const gate = file + '.reaper';
+  fs.writeFileSync(gate, 'orphaned reaper gate from stopped process', { flag: 'wx' });
+  t.after(async () => { m.server.closeAllConnections(); await m.close(); });
+  const r = await run(m.origin, dir, { NANO_LOCK_WAIT_MS: '320' });
+  assert.equal(r.code, 5, r.err);
+  assert.ok(r.err.includes(file), 'refusal must name original lock');
+  assert.ok(r.err.includes(gate), 'refusal must name exclusive gate');
+  assert.match(r.err, /Nothing signed/);
+  assert.match(r.err, /manually delete an orphaned gate file/);
+  assert.doesNotMatch(r.err, /signed block|taking it over/);
+  assert.equal(m.state.infoReplies, 0, 'must not touch account state');
+  assert.equal(m.state.paidCalls, 0, 'must not attempt paid request');
+  assert.equal(m.state.served, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), oldHolder, 'original dead-holder record preserved');
+  assert.equal(fs.readFileSync(gate, 'utf8'), 'orphaned reaper gate from stopped process');
+});
+
+test('crash-orphaned stale reaper gate refuses unsigned and does not steal a lock', async () => {
+  const m=await mock();const dir=tmp();
+  const gone=spawn(process.execPath,['-e','']);
+  await new Promise(resolve=>gone.on('close',resolve));
+  fs.writeFileSync(lockFile(dir),gone.pid+' '+Date.now());
+  fs.writeFileSync(lockFile(dir)+'.reaper', 'orphan reaper', { flag: 'wx' });
+  const r=await run(m.origin,dir,{NANO_LOCK_WAIT_MS:'320'});
+  await m.close();
+  assert.equal(r.code,5,r.err);
+  assert.match(r.err,/stale-reaper gate/);
+  assert.match(r.err,/Nothing signed/);
+  assert.doesNotMatch(r.err,/signed block|taking it over/);
+  assert.equal(m.state.infoReplies,0);
+  assert.equal(m.state.paidCalls,0);
+  assert.equal(fs.existsSync(lockFile(dir)),true);
+  assert.equal(fs.existsSync(lockFile(dir)+'.reaper'),true);
+});
+
 test('a live holder past NANO_LOCK_MAX_MS is refused immediately, keeps its lock, and can resume', { timeout: 15000 }, async t => {
   const m = await mock({ pauseFirstInfo: true }); const dir = tmp();
   const maxMs = 200;
