@@ -191,8 +191,13 @@ let credits = store.value;
 if (store.damaged) console.error('credits: ' + DATA + ' is damaged (' + store.error + ')' + (store.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
 const save = () => writeJsonAtomic(DATA, credits);
 const stats = { calls_paid: 0, calls_x402: 0, calls_402: 0, started: new Date().toISOString() };
-let x402Log = [];
-try { x402Log = JSON.parse(fs.readFileSync(X402_LOG, 'utf8')); } catch {}
+// The settled x402 blocks: the record that a block paid for a call, and the source of the known-payer list. Rewritten in
+// place, a crash mid-write emptied it and the catch answered [], so every settled payment left the public record and every
+// payer left the known-payer set (llmrt, item 5, 2026-10-20).
+const x402Store = readJsonStore(X402_LOG);
+let x402Log = Array.isArray(x402Store.value) ? x402Store.value : [];
+if (x402Store.damaged) console.error('x402 log: ' + X402_LOG + ' is damaged (' + x402Store.error + ')' + (x402Store.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
+const saveX402Log = () => writeJsonAtomic(X402_LOG, x402Log);
 
 // Every node call is bounded: a node that accepts the connection and never answers would otherwise hold
 // whatever awaited it forever, and since 6a03a21 the startup barrier awaits a block_info per unrecorded
@@ -292,13 +297,13 @@ async function workFor(hash, opts = {}) {
 // account's owner, so requesting it for someone else's frontier gains an attacker nothing.
 const PAYERS = path.join(__dirname, 'data', 'payers.json');
 const knownPayers = new Set();
-try { for (const a of JSON.parse(fs.readFileSync(PAYERS, 'utf8'))) knownPayers.add(a); } catch {}
+{ const r = readJsonStore(PAYERS); if (r.damaged) console.error('payers: ' + PAYERS + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered from .bak' : '')); if (Array.isArray(r.value)) for (const a of r.value) knownPayers.add(a); }
 for (const e of x402Log) if (e.payer) knownPayers.add(e.payer);
-try { for (const e of (JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'facilitator.json'), 'utf8')).settled || [])) if (e.payer) knownPayers.add(e.payer); } catch {}
+{ const r = readJsonStore(path.join(__dirname, 'data', 'facilitator.json')); for (const e of ((r.value && r.value.settled) || [])) if (e.payer) knownPayers.add(e.payer); }
 function rememberPayer(account) {
   if (!account || knownPayers.has(account)) return;
   knownPayers.add(account);
-  try { fs.writeFileSync(PAYERS, JSON.stringify([...knownPayers])); } catch {}
+  try { writeJsonAtomic(PAYERS, [...knownPayers]); } catch {}
 }
 // Is `hash` the frontier of an account that has paid before? One local block_info; false for
 // anything that is not a block on this node (e.g. a public key for an open block).
@@ -520,12 +525,15 @@ const REPRESENT = path.join(__dirname, 'data', 'represent.json');
 const REPRESENT_TTL_MS = 30 * 86_400_000;
 const REPRESENT_EXPIRED = 'this block was broadcast through this server and answered 402 for, and its payer did not re-present it within 30 days; it is not spendable as credit; write to agent@pursekeeper.dev with the hash';
 let represent = {};
-try { represent = JSON.parse(fs.readFileSync(REPRESENT, 'utf8')); } catch {}
+// The X-Nano-Represent tokens bind a broadcast-but-unconfirmed block to the payer who was handed the 402. A damaged file
+// read as {} turns every live token into "no record": the payer's own re-presentation is then served as before, which is the
+// takeover the tokens exist to prevent. Read through the store and report damage instead (llmrt, item 5, 2026-10-20).
+{ const r = readJsonStore(REPRESENT); if (r.damaged) console.error('represent: ' + REPRESENT + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on')); if (r.value && typeof r.value === 'object') represent = r.value; }
 function saveRepresent() {
   const now = Date.now(); let spent = false;
   for (const [h, r] of Object.entries(represent)) if (now - r.at > REPRESENT_TTL_MS) { delete represent[h]; credits[h] = '0'; noCredit.set(h, REPRESENT_EXPIRED); spent = true; }
   if (spent) save();
-  try { fs.writeFileSync(REPRESENT, JSON.stringify(represent)); } catch {}
+  try { writeJsonAtomic(REPRESENT, represent); } catch {}
 }
 async function confirmedWithin(hash) {
   const deadline = Date.now() + X402_CONFIRM.boundMs;
@@ -600,7 +608,7 @@ async function chargeX402Locked(req, res, payload, key) {
     if (represent[s.transaction] || represent[v.hash]) { delete represent[s.transaction]; delete represent[v.hash]; saveRepresent(); }
     x402Log.push({ hash: s.transaction, payer: v.payer, amount_raw: PRICE_RAW.toString(), resource: req.url, at: new Date().toISOString(), work_by: v.workBy || 'client' });
     rememberPayer(v.payer);
-    try { fs.writeFileSync(X402_LOG, JSON.stringify(x402Log)); } catch {}
+    try { saveX402Log(); } catch {}
     stats.calls_paid++; stats.calls_x402++;
     res.setHeader(x402.RESPONSE_HEADER, x402.settleHeader(s));
     res.setHeader('x-nano-payment-hash', s.transaction);

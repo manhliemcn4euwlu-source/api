@@ -98,3 +98,40 @@ test('the broadcast memory survives a crash: a paid block must not become an unk
   assert.equal(r.recovered, true);
   assert.equal(Object.keys(r.value).length, 1);
 });
+
+test('the settled x402 log survives a crash: a paid call must not leave the public record', () => {
+  // data/x402.json is the list of settled x402 blocks and the source of the known-payer list. Truncated, the catch answered
+  // [], so a settled payment left the record and its payer left the set that gets free work on the GPU.
+  const dir = tmpdir(), f = path.join(dir, 'x402.json');
+  const log = [{ hash: 'AA'.repeat(32), payer: 'nano_a', amount_raw: '1000', resource: '/api', at: '2026-10-02T00:00:00Z' }];
+  writeJsonAtomic(f, log);
+  assert.equal(readJsonStore(f).value.length, 1);
+  fs.writeFileSync(f, '[{"hash":"AA');
+  const r = readJsonStore(f);
+  assert.equal(r.recovered, true);
+  assert.equal(r.value.length, 1);
+  assert.equal(r.value[0].payer, 'nano_a', 'the known-payer list is rebuilt from the recovered log');
+});
+
+test('the represent tokens survive a crash: a live token must not read as no record', () => {
+  // data/represent.json binds a broadcast-but-unconfirmed block to the payer who was handed the 402. Read as {}, the payer's
+  // own re-presentation is served as before, which is the takeover the tokens exist to prevent.
+  const dir = tmpdir(), f = path.join(dir, 'represent.json');
+  const tok = { ['AB'.repeat(32)]: { token: 'deadbeef', at: Date.now() } };
+  writeJsonAtomic(f, tok);
+  assert.equal(readJsonStore(f).value['AB'.repeat(32)].token, 'deadbeef');
+  fs.writeFileSync(f, '{"AABB":{"tok');
+  const r = readJsonStore(f);
+  assert.equal(r.recovered, true);
+  assert.equal(r.value['AB'.repeat(32)].token, 'deadbeef');
+});
+
+test('the known-payer list survives a crash: a returning payer must not be treated as a stranger', () => {
+  const dir = tmpdir(), f = path.join(dir, 'payers.json');
+  writeJsonAtomic(f, ['nano_a', 'nano_b']);
+  assert.deepEqual(readJsonStore(f).value, ['nano_a', 'nano_b']);
+  fs.writeFileSync(f, '["nano_a",');
+  const r = readJsonStore(f);
+  assert.equal(r.recovered, true);
+  assert.deepEqual(r.value, ['nano_a', 'nano_b']);
+});
