@@ -556,8 +556,9 @@ async function chargeX402Locked(req, res, payload, key) {
     }
     // A used block whose reply is still in the replay cache but was refused there: say what the replay needs.
     const hint = key && served.has(key) && /already used/.test(v.reason) ? '; the reply it bought is replayed within ten minutes for the same method, URL and body only, and when the payment echoed the extra.session of the 402 it paid (a v2 client copies the accepted entry, so this is automatic) only to a payload echoing the same session; a payment that echoed no session is replayed on method, URL and body alone' : '';
-    // A refusal that carries a defined code (work_unavailable) keeps the code as the first token of `error`.
-    return paymentRequired(res, (/^work_unavailable\b/.test(v.reason) ? '' : 'x402: ') + v.reason + hint, req), false;
+    // A refusal that carries a defined code (error_work_unavailable, the scheme draft's name since 2026-10-20) keeps the
+    // code as the first token of `error`.
+    return paymentRequired(res, (/^error_work_unavailable\b/.test(v.reason) ? '' : 'x402: ') + v.reason + hint, req), false;
   }
   // In `settling` for the whole serve, the alreadyLanded branch included: the facilitator shares the set, so its /verify
   // refuses the hash meanwhile (Ops Control HQ, 2026-09-28 22:34 UTC); its /settle queues on the same per-hash lock
@@ -1243,7 +1244,7 @@ const server = http.createServer(async (req, res) => {
       ],
       request_header: 'PAYMENT-SIGNATURE (X-PAYMENT also accepted): base64 JSON {x402Version:2, accepted, payload:{block}}',
       response_header: 'PAYMENT-RESPONSE: base64 JSON {success, transaction, network, payer}',
-      block_rules: 'state block from your current confirmed frontier; balance = current balance - amount exactly; link = payTo; work optional (extra.work = "optional" refers to the work field of the payment block itself, on every route including /v1/work, whose product is work for the hash you name in the body): omit it or send "0" and this seller computes it before broadcasting; if you send work it must be valid at ' + x402.WORK_THRESHOLD + ' against previous; extra.workThreshold names that threshold',
+      block_rules: 'state block from your current confirmed frontier; balance = current balance - amount exactly; link = payTo; work optional (extra.workOptional = true, also written extra.work = "optional", refers to the work field of the payment block itself, on every route including /v1/work, whose product is work for the hash you name in the body): omit it or send "0" and this seller computes it before broadcasting; if you send work it must be valid at ' + x402.WORK_THRESHOLD + ' against previous; extra.workThreshold names that threshold',
       work: 'POST /v1/work {"hash": "<frontier>"}: 6 per minute per IP free (GPU, about a second, within a shared budget of ' + FREE_GPU_PER_MIN + ' a minute; CPU after that), or pay ' + nano(PRICE_RAW) + ' NANO per work (same headers) with no per-minute limit, at most four proofs generated at once and a fifth call answering 503 with nothing charged, a workless x402 block arriving while four are in flight refused with a 402 that asks for work attached, nothing broadcast; for sends to anyone else', example: '/examples/client-x402.js', spec: 'https://github.com/x402nano/schemes',
       work_sources: workSources() });
     if (u.pathname === '/v1/work' && req.method === 'POST') return workGenerate(req, res);

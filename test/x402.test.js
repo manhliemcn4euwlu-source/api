@@ -259,7 +259,7 @@ test('missing work without a workGenerate dep is rejected, and a bad source fail
   // then leads with that code so the 402's `error` is machine-matchable (scheme-proposal#1, kilkelly, 2026-10-17).
   const busy = Object.assign(new Error('4 proofs are being generated already'), { code: 'work_unavailable' });
   const r4 = await x.verify(payload(makeBlock({ work: '0' })), REQ, deps({ workGenerate: async () => { throw busy; } }));
-  assert.equal(r4.ok, false); assert.match(r4.reason, /^work_unavailable: 4 proofs/);
+  assert.equal(r4.ok, false); assert.match(r4.reason, /^error_work_unavailable: 4 proofs/);
 });
 
 // pyfile-toolkit, 2026-10-05: a workless block at a facilitator with no work source used to fail the shape
@@ -280,8 +280,8 @@ test('work is only generated after the cheap checks pass', async () => {
 
 test('requirements can advertise optional work', () => {
   const req = x.requirements({ payTo: PAY_TO, amountRaw: AMOUNT, workOptional: true });
-  assert.deepEqual(req.extra, { work: 'optional', workThreshold: 'fffffff800000000' });
-  assert.deepEqual(REQ.extra, { work: 'required', workThreshold: 'fffffff800000000' });
+  assert.deepEqual(req.extra, { work: 'optional', workOptional: true, workThreshold: 'fffffff800000000' });
+  assert.deepEqual(REQ.extra, { work: 'required', workOptional: false, workThreshold: 'fffffff800000000' });
 });
 
 // Since 2026-09-30 the landed block is recognised by its own hash wherever the frontier is: a wallet that appended a later

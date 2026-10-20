@@ -225,6 +225,18 @@ test('crash-orphaned stale reaper gate refuses unsigned and does not steal a loc
   assert.equal(fs.existsSync(lockFile(dir)+'.reaper'),true);
 });
 
+test('NANO_SAVE_PAYLOAD: a proof file that already exists is rewritten with mode 600', async () => {
+  const m = await mock(); const dir = tmp();
+  const proof = require('node:path').join(dir, 'proof.json');
+  fs.writeFileSync(proof, 'old contents', { mode: 0o644 });
+  assert.equal(fs.statSync(proof).mode & 0o777, 0o644);
+  const r = await run(m.origin, dir, { NANO_SAVE_PAYLOAD: proof });
+  await m.close();
+  assert.equal(r.code, 0, r.err);
+  assert.equal(fs.statSync(proof).mode & 0o777, 0o600, 'an existing file keeps its bits unless chmod runs');
+  assert.match(JSON.parse(fs.readFileSync(proof, 'utf8')).hash, /^[0-9A-F]{64}$/);
+});
+
 test('a live holder past NANO_LOCK_MAX_MS is refused immediately, keeps its lock, and can resume', { timeout: 15000 }, async t => {
   const m = await mock({ pauseFirstInfo: true }); const dir = tmp();
   const maxMs = 200;

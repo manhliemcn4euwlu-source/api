@@ -41,9 +41,11 @@ const REQUEST_HEADERS = ['payment-signature', 'x-payment'];
 // computes it before broadcasting. Work is not part of the signed hash, so this is safe.
 // extra.workThreshold names the send threshold either way, so a payer knows the target before
 // signing (pyfile-toolkit, 2026-10-05; the same keys pyfile-toolkit and CedarProof quote).
+// extra.workOptional (boolean) is the same flag under the name the scheme draft uses (kilkelly,
+// x402-nano-exact-scheme-proposal PR #1, draft of 2026-10-20); both are advertised until the draft lands.
 function requirements({ payTo, amountRaw, maxTimeoutSeconds = 60, workOptional = false }) {
   return { scheme: SCHEME, network: NETWORK, amount: String(amountRaw), asset: ASSET, payTo, maxTimeoutSeconds,
-    extra: { work: workOptional ? 'optional' : 'required', workThreshold: WORK_THRESHOLD } };
+    extra: { work: workOptional ? 'optional' : 'required', workOptional: !!workOptional, workThreshold: WORK_THRESHOLD } };
 }
 
 const NO_WORK = w => w === undefined || w === null || /^0*$/.test(String(w));
@@ -208,7 +210,7 @@ async function verify(payload, required, deps) {
       if (!deps.workGenerate) return fail('work ' + block.work + ' does not cover block.previous ' + block.previous + ' at the send threshold ' + threshold + ' (work is computed over the previous block hash, never over the new block\'s own hash)', payer);
       let w;
       try { w = await deps.workGenerate(block.previous); }
-      catch (e) { return fail((e && e.code === 'work_unavailable' ? 'work_unavailable: ' : 'could not generate work: ') + e.message, payer); }
+      catch (e) { return fail((e && e.code === 'work_unavailable' ? 'error_work_unavailable: ' : 'could not generate work: ') + e.message, payer); }
       if (!w || !validWork(w)) return fail('could not generate work' + (w ? ' (source returned work below threshold)' : ''), payer);
       block.work = String(w).toLowerCase();
       workBy = 'seller';

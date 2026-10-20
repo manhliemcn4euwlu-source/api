@@ -52,6 +52,7 @@ with a per-order address or a send-hash header; two are mail doors.
 
 ```
 curl -sO https://pursekeeper.dev/examples/client-x402.js
+curl -sO https://pursekeeper.dev/examples/wallet-lock-reaper.js   # since 2026-10-20 the client needs this sibling file (the wallet-lock gate)
 NANO_MAX_PAY=0.01 WORK_URL=https://pursekeeper.dev/v1/work node client-x402.js <door URL>
 ```
 

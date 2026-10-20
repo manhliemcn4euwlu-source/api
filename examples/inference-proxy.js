@@ -32,8 +32,8 @@
 // Every request must name a loopback Host (127.0.0.1, localhost, [::1]) and carry no Origin header, so a web page
 // the operator's browser opens cannot reach the wallet by a no-preflight POST or by DNS rebinding (403).
 // Endpoints: ANY /v1/* forwarded and paid; GET /_nano/state for the cap, spend and payment list
-// (hashes only; the seed never leaves this process and the signed-but-unbroadcast payloads stay in
-// the state file, mode 600). Streaming: stream:true is forwarded; the door's SSE is piped as it
+// (hashes only; the seed never leaves this process; the state file is mode 600). A signed send that did not
+// land stays counted until a block is confirmed at its height; the proxy publishes a change block there itself. Streaming: stream:true is forwarded; the door's SSE is piped as it
 // arrives (x-payer-stream: passthrough); a JSON answer to a stream request is wrapped as one SSE
 // chunk plus [DONE] carrying the whole message, tool_calls included (x-payer-stream: buffered). Only dependency: nanocurrency (npm i nanocurrency).
 //
@@ -78,7 +78,7 @@ const cfg = (() => {
   const account = N.deriveAddress(pub, { useNanoPrefix: true });
   return {
     keyHash,
-    upstream, host: u.host, cap, perCall, allow, port, sk, pub, account,
+    upstream, host: u.host, protocol: u.protocol, cap, perCall, allow, port, sk, pub, account,
     state: process.env.STATE_FILE || path.join(os.homedir(), '.pursekeeper', `inference-proxy-${port}.json`),
     rpc: process.env.NANO_RPC || null,
     api: (process.env.API || 'https://pursekeeper.dev').replace(/\/$/, ''),
@@ -101,20 +101,27 @@ function persist() {
   fs.renameSync(tmp, cfg.state);
 }
 const spent = () => BigInt(state.spent_raw);
+// Every payment entry carries `counted`: whether its amount is inside spent_raw right now. Count and uncount only through this.
+function count(p, counted) {
+  if (!!p.counted === counted) return;
+  const a = BigInt(p.amount_raw);
+  state.spent_raw = (counted ? spent() + a : spent() - a).toString();
+  p.counted = counted;
+}
 
 // ---- chain access: a node's RPC when given, else the free endpoints on pursekeeper.dev ----
 const post = (u, body) => fetch(u, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }).then(r => r.json());
 async function accountInfo() {
   if (cfg.rpc) {
-    const r = await post(cfg.rpc, { action: 'account_info', account: cfg.account, representative: 'true' });
+    const r = await post(cfg.rpc, { action: 'account_info', account: cfg.account, representative: 'true', include_confirmed: 'true' });
     if (r.error) return /not found/i.test(r.error) ? { found: false } : { error: r.error };
-    return { found: true, frontier: r.frontier, balance: r.balance, representative: r.representative };
+    return { found: true, frontier: r.frontier, balance: r.balance, representative: r.representative, height: Number(r.block_count), confirmed_height: Number(r.confirmation_height), confirmed_frontier: r.confirmed_frontier || null };
   }
   const r = await fetch(cfg.api + '/v1/account_info?account=' + cfg.account);
   if (!r.ok) throw new Error('account_info HTTP ' + r.status);
   const i = await r.json();
   if (i.error) return { error: i.error };
-  return i.found ? { found: true, frontier: i.frontier, balance: i.balance_raw, representative: i.representative } : { found: false };
+  return i.found ? { found: true, frontier: i.frontier, balance: i.balance_raw, representative: i.representative, height: Number(i.block_count), confirmed_height: Number(i.confirmation_height), confirmed_frontier: i.confirmed_frontier || null } : { found: false };
 }
 async function receivable() {
   if (cfg.rpc) {
@@ -207,15 +214,44 @@ async function pocket() {
   }
 }
 
-// Resolve payments whose broadcast outcome was unknown when they were counted.
-async function resolveUnknown() {
-  for (const p of state.payments.filter(x => x.status === 'unknown')) {
-    try {
-      const on = await landed(p.hash);
-      p.status = on ? 'broadcast' : 'not_broadcast';
-      if (!on) state.spent_raw = (spent() - BigInt(p.amount_raw)).toString();
+// A signed send that has not landed can still land for as long as the account's frontier is the block's `previous`:
+// a seller that refused the call still holds a valid signed block, and a node that took a broadcast whose reply was lost
+// may put it on the chain later. So such a send stays counted until it either lands or a different block is confirmed at
+// its height. The proxy forces the second outcome itself: it publishes a change block at that height (same balance,
+// same representative, nothing moves; the work computed for the send is good for it, since work is over `previous`).
+// Until 0.3.1 the refused send was uncounted at once, which left one per-call amount per frontier that a seller could
+// broadcast later outside the cap.
+const PENDING = new Set(['signed', 'unknown', 'not_broadcast', 'not_broadcast_refused']);
+const pending = () => state.payments.filter(p => PENDING.has(p.status) && !p.final && p.height != null);   // entries written before 0.3.1 carry no height and are left as they are
+async function invalidate(p, info) {
+  const w = p.work && p.work !== '0' ? p.work : await work(info.frontier);
+  const block = { type: 'state', account: cfg.account, previous: info.frontier, representative: info.representative, balance: String(info.balance), link: ZERO, work: w };
+  block.signature = N.signBlock({ hash: N.hashBlock(block), secretKey: cfg.sk });
+  p.invalidated_by = await broadcast(block, 'change');
+  log(`send ${p.hash} (${p.status}) can no longer land: change block ${p.invalidated_by} published at the same height; the spend stays counted until a block is confirmed there`);
+}
+// One look at one pending entry against a fresh account read. Returns true when the entry is settled for good.
+async function settleOne(p, info) {
+  const on = await landed(p.hash);                                     // throws when the chain cannot be read: the entry is left as it is
+  if (on) { p.status = p.kind === 'nano' ? 'broadcast' : 'broadcast_not_served'; p.final = true; count(p, true); return true; }
+  if (info.confirmed_height >= p.height) { p.final = true; count(p, false); return true; }   // a different block is confirmed at this height
+  if (String(info.frontier).toUpperCase() === String(p.previous).toUpperCase()) await invalidate(p, info);
+  return false;
+}
+// Settle what can be settled: at every paid call before the decision, at start-up, and right after a refusal.
+async function settlePending(entries) {
+  const list = entries || pending();
+  if (!list.length) return;
+  for (const p of list) {
+    for (let pass = 0; pass < 3; pass++) {
+      let info; try { info = await accountInfo(); } catch (e) { log('settle ' + p.hash + ': ' + e.message); break; }
+      if (!info.found || info.error) break;
+      const hadInvalidator = !!p.invalidated_by;
+      let done; try { done = await settleOne(p, info); } catch (e) { log('settle ' + p.hash + ': ' + e.message); break; }
       persist();
-    } catch { /* still unknown; stays counted */ }
+      if (done || (hadInvalidator && pass > 0)) break;             // a change block was just published: look again once it has had a moment to confirm
+      await sleep(pass === 0 ? 300 : 700);
+    }
   }
 }
 
@@ -249,8 +285,11 @@ function decide(q) {
   if (amount <= 0n) throw new Refuse('malformed_quote', { field: 'amount', value: q.amount });
   if (q.kind === 'nano') {
     for (const [k, u] of [['completeUrl', q.completeUrl], ['statusUrl', q.statusUrl]]) {
-      let h; try { h = new URL(String(u)).host; } catch { throw new Refuse('malformed_quote', { field: k }); }
-      if (h !== cfg.host) throw new Refuse('host_mismatch', { field: k, host: h, upstream: cfg.host });
+      let p; try { p = new URL(String(u)); } catch { throw new Refuse('malformed_quote', { field: k }); }
+      if (p.host !== cfg.host) throw new Refuse('host_mismatch', { field: k, host: p.host, upstream: cfg.host });
+      // Same host is not enough: a quote naming http:// on an https door would carry the chat (and the signed block)
+      // in clear. The URL's protocol must be the door's (ClawHub's scanner on 0.3.5, 2026-10-20).
+      if (p.protocol !== cfg.protocol) throw new Refuse('protocol_mismatch', { field: k, protocol: p.protocol, upstream: cfg.protocol });
     }
     if (!q.paymentId) throw new Refuse('malformed_quote', { field: 'paymentId' });
     // One payment id is paid at most once by this state file. A repeated id is a replay whatever the door says, and an
@@ -269,8 +308,9 @@ function decide(q) {
     for (const [k, v] of [['resource', q.pr && q.pr.resource], ['accepts.resource', q.accepted && q.accepted.resource]]) {
       if (v === undefined || v === null) continue;
       const u = typeof v === 'object' ? v.url : v;
-      let h; try { h = new URL(String(u)).host; } catch { throw new Refuse('malformed_quote', { field: k }); }
-      if (h !== cfg.host) throw new Refuse('resource_mismatch', { field: k, host: h, upstream: cfg.host });
+      let p; try { p = new URL(String(u)); } catch { throw new Refuse('malformed_quote', { field: k }); }
+      if (p.host !== cfg.host) throw new Refuse('resource_mismatch', { field: k, host: p.host, upstream: cfg.host });
+      if (p.protocol !== cfg.protocol) throw new Refuse('protocol_mismatch', { field: k, protocol: p.protocol, upstream: cfg.protocol });
     }
   }
   if (cfg.allow.length && !cfg.allow.includes(q.payTo)) throw new Refuse('payto_not_allowed', { payTo: q.payTo });
@@ -380,31 +420,37 @@ async function handle(req, res) {
   let paid;
   try {
     paid = await withLock(async () => {
-      await resolveUnknown();
+      await settlePending();
       const amount = decide(quote);                                 // first: nothing below runs for a refused quote
       await pocket();
       const info = await accountInfo();
       if (info.error) throw new Refuse('account_unreadable', { error: info.error });
       if (!info.found) throw new Refuse('account_not_opened', { account: cfg.account });
-      const entry = { t: new Date().toISOString(), kind: quote.kind, amount_raw: amount.toString(), payTo: quote.payTo, paymentId: quote.paymentId || null, hash: null, status: 'deciding', path: req.url };
+      const entry = { t: new Date().toISOString(), kind: quote.kind, amount_raw: amount.toString(), payTo: quote.payTo, paymentId: quote.paymentId || null, hash: null, status: 'deciding', counted: false, final: false, path: req.url };
       state.payments.push(entry);
       if (quote.kind === 'nano') {
         const w = await work(info.frontier);
         const { block, hash } = signSend(info, amount, quote.payTo, w);
-        entry.hash = hash; entry.status = 'signed'; state.spent_raw = (spent() + amount).toString(); persist();   // counted before the network sees it
-        try { await broadcast(block, 'send'); entry.status = 'broadcast'; }
+        entry.hash = hash; entry.previous = info.frontier; entry.height = info.height + 1; entry.work = w; entry.status = 'signed'; count(entry, true); persist();   // counted before the network sees it
+        try { await broadcast(block, 'send'); entry.status = 'broadcast'; entry.final = true; }
         catch (e) {
           let on; try { on = await landed(hash); } catch { on = null; }
-          if (on === false) { entry.status = 'not_broadcast'; state.spent_raw = (spent() - amount).toString(); persist(); throw new Refuse('broadcast_failed', { error: e.message, hash }); }
-          entry.status = on ? 'broadcast' : 'unknown';              // unknown stays counted until a later read resolves it
+          if (on === false) {
+            // The node did not take it, but the signed block exists: retire it at this height. Uncounted only once a block is confirmed there.
+            entry.status = 'not_broadcast'; persist();
+            await settlePending([entry]);
+            throw new Refuse('broadcast_failed', { error: e.message, hash, counted: !!entry.counted, invalidated_by: entry.invalidated_by || null });
+          }
+          if (on) entry.final = true;
+          entry.status = on ? 'broadcast' : 'unknown';              // unknown stays counted until a later read settles it
         }
         state.paid++; persist();
         return { entry, amount };
       }
-      // exact: sign, then present; the seller broadcasts. Counted at signing; a refused payload is kept for re-presentation.
+      // exact: sign, then present; the seller broadcasts. Counted at signing; a refusal is settled against the chain below.
       const w = quote.sellerWork ? '0' : await work(info.frontier);
       const { block, hash } = signSend(info, amount, quote.payTo, w);
-      entry.hash = hash; entry.status = 'signed'; state.spent_raw = (spent() + amount).toString(); persist();
+      entry.hash = hash; entry.previous = info.frontier; entry.height = info.height + 1; entry.work = w; entry.status = 'signed'; count(entry, true); persist();
       const payload = { x402Version: 2, resource: quote.pr.resource, accepted: quote.accepted, payload: { block } };
       const extra = { 'payment-signature': b64(payload) };
       let r = await send(extra);
@@ -415,13 +461,16 @@ async function handle(req, res) {
         if (tok) extra['x-nano-represent'] = String(tok); else delete extra['x-nano-represent'];
         await sleep(2000); r = await send(extra);
       }
-      if (r.ok) { entry.status = 'served'; state.paid++; persist(); return { entry, amount, response: r }; }
-      // Not served. Was the block broadcast? If not, the signed payload stays in the state file for the operator; the frontier is unchanged.
+      if (r.ok) { entry.status = 'served'; entry.final = true; state.paid++; persist(); return { entry, amount, response: r }; }
+      // Not served. Was the block broadcast? Landed: counted, reported with the hash and the seller's token. Not landed: the
+      // seller still holds a valid signed block, so it is retired with a change block at the same height and uncounted once a
+      // block is confirmed there. The payload is not kept: a refused call is a new quote and a new send, never a re-presentation.
       let on; try { on = await landed(hash); } catch { on = null; }
       entry.status = on === true ? 'broadcast_not_served' : on === false ? 'not_broadcast_refused' : 'unknown';
-      if (on === false) { entry.payload = payload; entry.represent_token = extra['x-nano-represent'] || null; state.spent_raw = (spent() - amount).toString(); }
+      if (on === true) { entry.final = true; entry.represent_token = extra['x-nano-represent'] || null; }
       persist();
-      throw new Refuse('not_served_after_payment', { status: r.status, hash, broadcast: on, body: (await r.text().catch(() => '')).slice(0, 300) });
+      if (on === false) await settlePending([entry]);
+      throw new Refuse('not_served_after_payment', { status: r.status, hash, broadcast: on, counted: !!entry.counted, invalidated_by: entry.invalidated_by || null, body: (await r.text().catch(() => '')).slice(0, 300) });
     });
   } catch (e) {
     if (e instanceof Refuse) return refuse(res, e.code === 'not_served_after_payment' ? 502 : 402, e.code, e.detail);
@@ -459,5 +508,6 @@ async function handle(req, res) {
 const server = http.createServer((req, res) => handle(req, res).catch(e => { log('handler error: ' + (e.stack || e.message)); if (!res.headersSent) refuse(res, 500, 'internal', { error: e.message }); else res.end(); }));
 server.listen(cfg.port, '127.0.0.1', () => {
   persist();
+  if (pending().length) withLock(() => settlePending()).catch(e => log('settle at start: ' + e.message));
   log(`inference-proxy on http://127.0.0.1:${server.address().port}/v1 -> ${cfg.upstream}; paying from ${cfg.account}; cap ${fmt(cfg.cap)} XNO (spent ${fmt(spent())}), per call ${fmt(cfg.perCall)}; PROXY_KEY set; state ${cfg.state}`);
 });

@@ -97,7 +97,7 @@ case its fee block is still settling; one still shorter than three blocks after 
 is answered "retry in a minute" and looked at again on the next presentation, not cached;
 PlatinumVera, 2026-09-28 22:30 UTC), and the ledger is re-read every ten minutes.
 Client: [`examples/client-x402.js`](examples/client-x402.js) (needs only
-`nanocurrency` and, since 2026-09-12, no node: account_info comes from pursekeeper.dev
+`nanocurrency`, its sibling [`examples/wallet-lock-reaper.js`](examples/wallet-lock-reaper.js) since 2026-10-20, and, since 2026-09-12, no node: account_info comes from pursekeeper.dev
 unless `NANO_RPC` is set; works against any `nano:mainnet` x402 seller).
 To open a fresh client account from a pending send: [`examples/receive.js`](examples/receive.js).
 Tested end to end on 2026-09-07: two paid calls from a separate account settled

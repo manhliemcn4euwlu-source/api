@@ -257,9 +257,10 @@ async function explainFate(account, hash, previous, lastToken) {
   const balance = BigInt(info.balance) - BigInt(accepted.amount);
   if (balance < 0n) throw new Error(`insufficient balance: have ${info.balance} raw`);
 
-  // Sellers that advertise extra.work = 'optional' compute the work themselves (work is not
-  // signed, so the seller can add it): send "0" and skip the wait. Set FORCE_WORK=1 to opt out.
-  const sellerWork = accepted.extra && accepted.extra.work === 'optional' && !process.env.FORCE_WORK;
+  // Sellers that advertise extra.workOptional = true (the scheme draft's name) or extra.work = 'optional' (this
+  // seller's older name, still sent) compute the work themselves (work is not signed, so the seller can add it):
+  // send "0" and skip the wait. Set FORCE_WORK=1 to opt out.
+  const sellerWork = !!accepted.extra && (accepted.extra.workOptional === true || accepted.extra.work === 'optional') && !process.env.FORCE_WORK;
   const w = sellerWork ? '0' : await work(info.frontier, new URL(url).origin);
   if (sellerWork) console.error('seller computes the work; skipping work_generate');
   const { block, hash } = N.createBlock(sk, { work: w, previous: info.frontier, representative: info.representative, balance: balance.toString(), link: accepted.payTo });
@@ -305,6 +306,9 @@ async function explainFate(account, hash, previous, lastToken) {
   if (process.env.NANO_SAVE_PAYLOAD) {
     const out = { saved_at: new Date().toISOString(), url, method: init.method || 'GET', hash, status: r ? r.status : null, served, represent_token: lastToken, payment_signature: init.headers['payment-signature'] };
     fs.writeFileSync(process.env.NANO_SAVE_PAYLOAD, JSON.stringify(out, null, 1) + '\n', { mode: 0o600 });
+    // `mode` above applies only when the file is created; a file that already exists keeps its bits, so set them
+    // explicitly (ClawHub's scanner on skill 0.3.5, 2026-10-20).
+    try { fs.chmodSync(process.env.NANO_SAVE_PAYLOAD, 0o600); } catch (e) { console.error('could not set mode 600 on ' + process.env.NANO_SAVE_PAYLOAD + ': ' + e.message); }
     console.error('payment header saved to ' + process.env.NANO_SAVE_PAYLOAD + (served ? '' : ' (not served; the signed block inside is still spendable until the account\'s frontier moves)'));
   }
   // Anything but 2xx after the payment means the call was not served: exit 1, so a caller that reads only the return code
