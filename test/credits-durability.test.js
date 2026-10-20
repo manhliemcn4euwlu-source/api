@@ -70,3 +70,31 @@ test('a damaged ledger with a good .bak loads the .bak and says so', () => {
   assert.equal(r.recovered, true);
   assert.equal(r.damaged, true);
 });
+
+test('the facilitator settlement list survives a crash: /stats must not lose every settled block', () => {
+  // facilitator.json holds every settlement this facilitator made; it was rewritten in place, and its loader answered the
+  // defaults on a parse error, so a crash mid-write emptied the public settlement record. Same store, same guarantee.
+  const dir = tmpdir(), f = path.join(dir, 'facilitator.json');
+  const settled = { since: '2026-10-01T00:00:00Z', settle: 3, settle_ok: 3,
+    settled: [{ hash: 'AA'.repeat(32), payer: 'nano_a', pay_to: 'nano_b', amount_raw: '1000', at: '2026-10-02T00:00:00Z' }] };
+  writeJsonAtomic(f, settled);
+  assert.equal(readJsonStore(f).value.settled.length, 1);
+  fs.writeFileSync(f, '{"settled":[{"hash":"AA');   // killed mid-write
+  const r = readJsonStore(f);
+  assert.equal(r.damaged, true);
+  assert.equal(r.recovered, true);
+  assert.equal(r.value.settled.length, 1, 'the settled history is not silently emptied');
+});
+
+test('the broadcast memory survives a crash: a paid block must not become an unknown one', () => {
+  // broadcast.json is what lets a payer whose success reply was lost learn the block went through. Truncated, the entry is
+  // gone and the retry is refused as a replay with no hash.
+  const dir = tmpdir(), f = path.join(dir, 'broadcast.json');
+  const b = { ['AB'.repeat(32)]: { payer: 'nano_a', payTo: 'nano_b', amount: '1000', at: Date.now(), answered: true, answeredAt: '2026-10-02T00:00:00Z' } };
+  writeJsonAtomic(f, b);
+  assert.equal(Object.keys(readJsonStore(f).value).length, 1);
+  fs.writeFileSync(f, '{"AABB');
+  const r = readJsonStore(f);
+  assert.equal(r.recovered, true);
+  assert.equal(Object.keys(r.value).length, 1);
+});

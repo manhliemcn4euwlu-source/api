@@ -25,8 +25,11 @@ function writeJsonAtomic(file, value, opts = {}) {
     if (opts.afterWrite) opts.afterWrite();   // test seam: simulate a crash before the rename
     // Keep the previous complete file as .bak before it is replaced. A rename over the destination is atomic on the
     // same filesystem, so a reader never observes a half-written ledger.
-    try { fs.copyFileSync(file, file + '.bak'); } catch { /* first write: nothing to keep */ }
+    try { fs.copyFileSync(file, file + '.bak'); } catch { /* first write: nothing to keep yet */ }
     fs.renameSync(tmp, file);
+    // On the first write there was no previous file to keep, so the .bak is made from the copy just written: a ledger
+    // that has been written once must already be recoverable from a crash, not only from its second write onwards.
+    try { fs.accessSync(file + '.bak'); } catch { try { fs.copyFileSync(file, file + '.bak'); } catch { /* best effort */ } }
     try { const d = fs.openSync(dir, 'r'); fs.fsyncSync(d); fs.closeSync(d); } catch { /* directory fsync is best effort */ }
   } finally {
     if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }

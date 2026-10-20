@@ -28,6 +28,7 @@ const crypto = require('crypto');
 const N = require('nanocurrency');
 const x402 = require('./x402');
 const { withHashLock } = require('./hashlock');   // the seller path's per-hash lock, shared
+const { writeJsonAtomic, readJsonStore } = require('./creditstore');   // durable money files (see creditstore.js)
 
 const HOST = 'facilitator.pursekeeper.dev';
 const PREFIX = '/facilitator';
@@ -36,10 +37,15 @@ const LIMITS = { verify: 120, settle: 60 };   // per IP per minute
 const MAX_POLL_S = 30;                          // cap on maxTimeoutSeconds for confirmation polling
 
 let stats = { since: new Date().toISOString(), verify: 0, verify_ok: 0, settle: 0, settle_ok: 0, ips: {}, settled: [], pay_to: {}, pay_to_since: null };
-try { stats = { ...stats, ...JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')) }; } catch {}
+// The settlement list is the public record of every block this facilitator settled, and it is what /stats, the payTo rows and
+// a seller's own check read. It was written in place, so a crash mid-write left truncated JSON and this catch answered the
+// defaults: the whole settled history silently became empty, with no line saying so (llmrt, item 5, 2026-10-20).
+const statsStore = readJsonStore(STATS_FILE);
+if (statsStore.damaged) console.error('facilitator: ' + STATS_FILE + ' is damaged (' + statsStore.error + ')' + (statsStore.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
+if (statsStore.value && typeof statsStore.value === 'object') stats = { ...stats, ...statsStore.value };
 if (!stats.pay_to) stats.pay_to = {};
 if (!stats.pay_to_since) stats.pay_to_since = new Date().toISOString();   // per-payTo counters exist since 2026-09-22
-function saveStats() { try { fs.mkdirSync(path.dirname(STATS_FILE), { recursive: true }); fs.writeFileSync(STATS_FILE, JSON.stringify(stats)); } catch {} }
+function saveStats() { try { fs.mkdirSync(path.dirname(STATS_FILE), { recursive: true }); writeJsonAtomic(STATS_FILE, stats); } catch {} }
 
 // Map the descriptive reasons of x402.verify() to short codes a client can branch on.
 // The text itself is returned as `invalidMessage` (verify) / `errorMessage` (settle), the names the x402 reference types and
@@ -82,8 +88,12 @@ const broadcast = new Map();
 const BROADCAST_FILE = process.env.BROADCAST_FILE || path.join(__dirname, 'data', 'broadcast.json');
 function loadBroadcast(file = BROADCAST_FILE) {
   broadcast.clear();
-  let stored = {};
-  try { stored = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return 0; }
+  // A damaged broadcast file must not read as "nothing was ever broadcast": every block in it was paid, and losing the
+  // entries turns a payer's retry after a lost success reply into a refused replay with no hash. Read it through the same
+  // store as the other money files, so the .bak is used and the damage is reported (llmrt, item 5, 2026-10-20).
+  const r = readJsonStore(file);
+  if (r.damaged) console.error('facilitator: ' + file + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
+  const stored = r.value && typeof r.value === 'object' ? r.value : {};
   const now = Date.now();
   for (const [h, b] of Object.entries(stored)) if (b && typeof b === 'object' && now - b.at <= BROADCAST_TTL_MS) broadcast.set(h, b);
   return broadcast.size;
@@ -91,9 +101,9 @@ function loadBroadcast(file = BROADCAST_FILE) {
 function saveBroadcast(file = BROADCAST_FILE) {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = file + '.' + process.pid + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(broadcast)));
-    fs.renameSync(tmp, file);
+    // temp + fsync + .bak + rename, the same path credits.json takes: a rename without the fsync can leave a zero-length
+    // file after a power loss on some filesystems, and this file is the record that a paid block was this facilitator's.
+    writeJsonAtomic(file, Object.fromEntries(broadcast));
   } catch (e) { console.error('facilitator: broadcast memory not saved: ' + e.message); }
 }
 loadBroadcast();
