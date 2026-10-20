@@ -18,6 +18,7 @@ const cohorts = require('./cohorts');
 const x402 = require('./x402');
 const facilitator = require('./facilitator');
 const { withHashLock } = require('./hashlock');   // per-hash serialisation shared with the facilitator
+const { writeJsonAtomic, readJsonStore } = require('./creditstore');   // durable money files (see creditstore.js)
 const nanocurrency = require('nanocurrency');
 const { Helper } = require('@x402nano/helper');
 const { ExactNanoScheme: X402Reference } = require('@x402nano/exact/facilitator');
@@ -34,7 +35,7 @@ const DATA = path.join(__dirname, 'data', 'credits.json');
 // ten-minute reload learns the exclusion, and that needs the account (Ops Control HQ, 2026-09-28, from e1001b3).
 const CREDIT_ACCOUNTS = path.join(__dirname, 'data', 'credit-accounts.json');
 let creditAccounts = {}; try { creditAccounts = JSON.parse(fs.readFileSync(CREDIT_ACCOUNTS, 'utf8')); } catch {}
-const saveCreditAccounts = () => { try { fs.writeFileSync(CREDIT_ACCOUNTS, JSON.stringify(creditAccounts)); } catch {} };
+const saveCreditAccounts = () => { try { writeJsonAtomic(CREDIT_ACCOUNTS, creditAccounts); } catch {} };
 const X402_LOG = path.join(__dirname, 'data', 'x402.json');   // settled x402 blocks: hash, payer, amount, resource, at
 // Work sources, tried in order: WORK_URLS (comma-separated RPC-style work_generate endpoints,
 // e.g. a keyed hosted GPU work server), then the local node. Clients may omit block.work on
@@ -181,9 +182,14 @@ async function checkoutWallet(account, hash) {
 }
 const RAW_PER_NANO = 10n ** 30n;
 
-let credits = {};
-try { credits = JSON.parse(fs.readFileSync(DATA, 'utf8')); } catch {}
-const save = () => fs.writeFileSync(DATA, JSON.stringify(credits));
+// A credit is a payment already on chain; this file is the only record that it has not been spent. Until 2026-10-20 it
+// was rewritten in place, so a process killed mid-write left truncated JSON, the loader's `catch {}` answered {}, and every
+// unspent balance silently became zero. Writes are now atomic (temp + fsync + rename, previous file kept as .bak) and a
+// damaged file is reported instead of being read as "no credits" (llmrt, item 5, 2026-10-20).
+const store = readJsonStore(DATA);
+let credits = store.value;
+if (store.damaged) console.error('credits: ' + DATA + ' is damaged (' + store.error + ')' + (store.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
+const save = () => writeJsonAtomic(DATA, credits);
 const stats = { calls_paid: 0, calls_x402: 0, calls_402: 0, started: new Date().toISOString() };
 let x402Log = [];
 try { x402Log = JSON.parse(fs.readFileSync(X402_LOG, 'utf8')); } catch {}
