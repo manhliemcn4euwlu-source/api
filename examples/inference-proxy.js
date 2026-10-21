@@ -31,7 +31,7 @@
 //      RECEIVE (default 1: pocket refunds and other receivables before a paid call; 0 to skip).
 // Every request must name a loopback Host (127.0.0.1, localhost, [::1]) and carry no Origin header, so a web page
 // the operator's browser opens cannot reach the wallet by a no-preflight POST or by DNS rebinding (403).
-// Endpoints: ANY /v1/* forwarded and paid; GET /_nano/state for the cap, spend and payment list
+// Endpoints: ANY /v1/* forwarded and paid; GET /_nano/state (same key) for the cap, spend and payment list
 // (hashes only; the seed never leaves this process; the state file is mode 600). A signed send that did not
 // land stays counted until a block is confirmed at its height; the proxy publishes a change block there itself. Streaming: stream:true is forwarded; the door's SSE is piped as it
 // arrives (x-payer-stream: passthrough); a JSON answer to a stream request is wrapped as one SSE
@@ -395,13 +395,17 @@ function keyPresented(req) {
 async function handle(req, res) {
   const g = gate(req);
   if (g) return refuse(res, g.status, g.code, g.detail);
+  // The state readout is key-gated like /v1/*: it lists recent payment hashes, pay-to accounts and payment ids, and
+  // on a shared loopback any process could read them without the key (ClawHub's scanner on 0.3.6, 2026-10-20).
+  const keyRefusal = () => refuse(res, 401, 'proxy_key', { presented: ['authorization', 'x-api-key'].filter(h => req.headers[h] !== undefined), hint: 'send PROXY_KEY as "Authorization: Bearer <key>" or "x-api-key: <key>"' });
   if (req.method === 'GET' && req.url === '/_nano/state') {
+    if (!keyPresented(req)) return keyRefusal();
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ account: cfg.account, upstream: cfg.upstream, cap: fmt(cfg.cap), per_call_limit: fmt(cfg.perCall), spent: fmt(spent()), remaining: fmt(cfg.cap - spent()), received: fmt(state.received_raw),
       calls: state.calls, paid: state.paid, refused: state.refused, allow_payto: cfg.allow, refusals: (state.refusals || []).slice(-10), payments: state.payments.slice(-50).map(p => ({ ...p, payload: undefined })), receipts: state.receipts.slice(-20) }, null, 1));
   }
   if (!req.url.startsWith('/v1/')) { res.writeHead(404, { 'content-type': 'application/json' }); return res.end('{"error":"only /v1/* is forwarded"}'); }
-  if (!keyPresented(req)) return refuse(res, 401, 'proxy_key', { presented: ['authorization', 'x-api-key'].filter(h => req.headers[h] !== undefined), hint: 'send PROXY_KEY as "Authorization: Bearer <key>" or "x-api-key: <key>"' });
+  if (!keyPresented(req)) return keyRefusal();
   state.calls++;
   const chunks = []; let size = 0;
   for await (const c of req) { size += c.length; if (size > 4 << 20) { res.writeHead(413); return res.end(); } chunks.push(c); }
