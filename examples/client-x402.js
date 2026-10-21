@@ -29,7 +29,8 @@
 // nano:mainnet "exact" entry -> build and sign a send block for exactly that amount
 // -> retry with PAYMENT-SIGNATURE: base64 JSON {x402Version, resource, accepted,
 // payload: {block}} -> the seller verifies and broadcasts the block, replies 200
-// with PAYMENT-RESPONSE carrying the block hash.
+// with PAYMENT-RESPONSE carrying the block hash. The unsigned quote may follow
+// redirects; signed requests use the final 402 response URL and never follow redirects.
 //
 // One writer per account. A Nano account chain is serial: each send commits to its predecessor, so ten processes paying
 // from one seed at once would sign ten competing blocks against one frontier; one would land and nine would be refused
@@ -268,11 +269,26 @@ async function explainFate(account, hash, previous, lastToken) {
   console.error('signed block', hash);
 
   const payload = { x402Version: 2, resource: pr.resource, accepted, payload: { block } };
+  // The unsigned quote may have followed a seller's canonical redirect. Send the signature only to the URL that answered 402.
+  const signedUrl = first.url || url;
   const init = reqInit(); init.headers['payment-signature'] = b64(payload);   // header names are case-insensitive; lowercase keeps the map free of case variants
+  init.redirect = 'manual';   // never let a paid redirect forward this signed, spendable block to another URL
   // A transport failure after the payment was sent (the seller went away mid-call, a timeout) is not an error to report
   // and stop at: the block may be on the chain. Its fate is read from the account below, like any other unserved outcome.
   const lost = e => { console.error('no reply from the seller after the payment was sent: ' + e.message); return null; };
-  let r = await fetch(url, init).catch(lost);
+  const signedFetch = () => fetch(signedUrl, init).catch(lost);
+  const noteSignedRedirect = response => {
+    if (!response || response.status < 300 || response.status >= 400) return;
+    const location = response.headers.get('location');
+    let locationOrigin = '(no Location)';
+    if (location) {
+      try { locationOrigin = new URL(location, signedUrl).origin; }
+      catch { locationOrigin = '(invalid Location)'; }
+    }
+    console.error(`signed redirect refused: HTTP ${response.status}; Location origin ${locationOrigin}; PAYMENT-SIGNATURE was not forwarded to the redirect target`);
+  };
+  let r = await signedFetch();
+  noteSignedRedirect(r);
   // A 402 after the payment whose note says the block was broadcast but not yet confirmed (pursekeeper.dev waits 8 s for
   // confirmation before serving, since 2026-09-29): the block is on the chain, so re-present the same payload for up to a
   // minute. Never sign a new block here: the frontier has moved to the pending block and a new send would pay twice.
@@ -292,7 +308,8 @@ async function explainFate(account, hash, previous, lastToken) {
     if (tok) { init.headers['x-nano-represent'] = String(tok); lastToken = String(tok); } else delete init.headers['x-nano-represent'];
     console.error('block ' + hash + ' broadcast, not yet confirmed; re-presenting the same payment');
     await new Promise(s => setTimeout(s, 2000));
-    r = await fetch(url, init).catch(lost);
+    r = await signedFetch();
+    noteSignedRedirect(r);
   }
   if (r) {
     const settle = r.headers.get('payment-response');
@@ -304,7 +321,7 @@ async function explainFate(account, hash, previous, lastToken) {
   }
   const served = !!r && r.status >= 200 && r.status < 300;
   if (process.env.NANO_SAVE_PAYLOAD) {
-    const out = { saved_at: new Date().toISOString(), url, method: init.method || 'GET', hash, status: r ? r.status : null, served, represent_token: lastToken, payment_signature: init.headers['payment-signature'] };
+    const out = { saved_at: new Date().toISOString(), url: signedUrl, method: init.method || 'GET', hash, status: r ? r.status : null, served, represent_token: lastToken, payment_signature: init.headers['payment-signature'] };
     fs.writeFileSync(process.env.NANO_SAVE_PAYLOAD, JSON.stringify(out, null, 1) + '\n', { mode: 0o600 });
     // `mode` above applies only when the file is created; a file that already exists keeps its bits, so set them
     // explicitly (ClawHub's scanner on skill 0.3.5, 2026-10-20).
