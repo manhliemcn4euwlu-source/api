@@ -34,7 +34,8 @@ const DATA = path.join(__dirname, 'data', 'credits.json');
 // accounts (own, funding, donors); a credit stored before its account was listed has to be revoked when the
 // ten-minute reload learns the exclusion, and that needs the account (Ops Control HQ, 2026-09-28, from e1001b3).
 const CREDIT_ACCOUNTS = path.join(__dirname, 'data', 'credit-accounts.json');
-let creditAccounts = {}; try { creditAccounts = JSON.parse(fs.readFileSync(CREDIT_ACCOUNTS, 'utf8')); } catch {}
+let creditAccounts = {};
+{ const r = readJsonStore(CREDIT_ACCOUNTS); if (r.damaged) console.error('credit-accounts: ' + CREDIT_ACCOUNTS + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on')); if (r.value && typeof r.value === 'object') creditAccounts = r.value; }
 const saveCreditAccounts = () => { try { writeJsonAtomic(CREDIT_ACCOUNTS, creditAccounts); } catch {} };
 const X402_LOG = path.join(__dirname, 'data', 'x402.json');   // settled x402 blocks: hash, payer, amount, resource, at
 // Work sources, tried in order: WORK_URLS (comma-separated RPC-style work_generate endpoints,
