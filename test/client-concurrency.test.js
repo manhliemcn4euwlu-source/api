@@ -58,10 +58,13 @@ function mock(opts = {}) {
     // Each quote carries its own price (base + the probe's number): ten purchases from one frontier at one price would be
     // ten byte-identical blocks, one hash, which the seller's per-hash lock does serialise; the review's case is ten
     // distinct sends (different sellers, prices or links), so the quotes differ here and so do the blocks.
-    if (!sig) { state.probes++; const amount = (BigInt(AMOUNT) + BigInt(state.probes)).toString(); state.issued.add(amount);
+    if (!sig) { state.probes++;
+      if (opts.quoteRedirectTo) { res.writeHead(opts.quoteRedirectStatus || 307, { location: opts.quoteRedirectTo }); return res.end(); }
+      const amount = (BigInt(AMOUNT) + BigInt(state.probes)).toString(); state.issued.add(amount);
       const pr = { x402Version: 2, resource: { url: 'http://127.0.0.1/buy' }, accepts: [{ scheme: 'exact', network: 'nano:mainnet', asset: 'XNO', amount, payTo: PAY_TO, maxTimeoutSeconds: 60, extra: { work: 'optional' } }] };
       return json(402, { x402: pr }, { 'payment-required': b64(pr) }); }
     state.paidCalls++;
+    if (opts.redirectTo) { res.writeHead(opts.redirectStatus || 307, { location: opts.redirectTo }); return res.end(); }
     let block; try { block = unb64(sig).payload.block; } catch { state.refused++; return json(402, { error: 'bad payment header' }); }
     if (String(block.previous).toUpperCase() !== state.frontier) { state.refused++; return json(402, { error: 'block.previous is not the account frontier (' + state.frontier + ')' }); }
     if (!state.issued.has((BigInt(state.balance) - BigInt(block.balance)).toString())) { state.refused++; return json(402, { error: 'wrong amount' }); }
@@ -86,6 +89,21 @@ function run(origin, lockDir, env = {}) {
   });
   completion.cancel = () => { if (child && child.exitCode === null && child.signalCode === null) child.kill(); };
   return completion;
+}
+function redirectSink() {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      requests.push({ url: req.url, method: req.method, paymentSignature: req.headers['payment-signature'] || null, body: Buffer.concat(chunks).toString() });
+      res.writeHead(200, { 'content-type': 'text/plain' }); res.end('redirect target reached');
+    });
+  });
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({
+    server, requests, origin: 'http://127.0.0.1:' + server.address().port,
+    close: () => new Promise(r => { server.closeAllConnections(); server.close(r); }),
+  })));
 }
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'client-lock-'));
 const account = () => N.deriveAddress(N.derivePublicKey(N.deriveSecretKey(SEED, 0)), { useNanoPrefix: true });
@@ -223,6 +241,60 @@ test('crash-orphaned stale reaper gate refuses unsigned and does not steal a loc
   assert.equal(m.state.paidCalls,0);
   assert.equal(fs.existsSync(lockFile(dir)),true);
   assert.equal(fs.existsSync(lockFile(dir)+'.reaper'),true);
+});
+
+test('signed cross-origin 307/308 responses are not followed and do not count as served', async t => {
+  const target = await redirectSink();
+  t.after(() => target.close());
+  for (const status of [307, 308]) {
+    const m = await mock({ redirectTo: target.origin + '/capture', redirectStatus: status });
+    const dir = tmp();
+    const proof = path.join(dir, `proof-${status}.json`);
+    try {
+      const r = await run(m.origin, dir, { METHOD: 'POST', BODY: '{"probe":"synthetic"}', NANO_SAVE_PAYLOAD: proof });
+      await m.close();
+      assert.equal(r.code, 1, r.err);
+      assert.equal(m.state.paidCalls, 1);
+      assert.equal(target.requests.length, 0, 'redirect target must not receive any request');
+      assert.match(r.err, new RegExp(`signed redirect refused: HTTP ${status}`));
+      assert.ok(r.err.includes('Location origin ' + target.origin), r.err);
+      assert.match(r.err, /PAYMENT-SIGNATURE was not forwarded to the redirect target/i);
+      const saved = JSON.parse(fs.readFileSync(proof, 'utf8'));
+      assert.equal(saved.url, m.origin + '/buy');
+      assert.equal(saved.status, status);
+      assert.equal(saved.served, false);
+    } finally {
+      if (m.server.listening) await m.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('unsigned quote may redirect, but the signed call uses the URL that returned 402', async t => {
+  const target = await redirectSink();
+  t.after(() => target.close());
+  const canonical = await mock({ redirectTo: target.origin + '/capture', redirectStatus: 307 });
+  const entry = await mock({ quoteRedirectTo: canonical.origin + '/buy', quoteRedirectStatus: 307 });
+  const dir = tmp();
+  const proof = path.join(dir, 'canonical-proof.json');
+  try {
+    const r = await run(entry.origin, dir, { METHOD: 'POST', BODY: '{"probe":"canonical"}', NANO_SAVE_PAYLOAD: proof });
+    await Promise.all([entry.close(), canonical.close()]);
+    assert.equal(r.code, 1, r.err);
+    assert.equal(entry.state.probes, 1, 'original endpoint issued only an unsigned redirect');
+    assert.equal(canonical.state.probes, 1, 'canonical endpoint returned the quote');
+    assert.equal(canonical.state.paidCalls, 1, 'signed request went to the endpoint that returned 402');
+    assert.equal(target.requests.length, 0, 'signed 307 was not followed');
+    const saved = JSON.parse(fs.readFileSync(proof, 'utf8'));
+    assert.equal(saved.url, canonical.origin + '/buy');
+    assert.equal(saved.status, 307);
+    assert.equal(saved.served, false);
+    assert.ok(r.err.includes('Location origin ' + target.origin), r.err);
+  } finally {
+    if (entry.server.listening) await entry.close();
+    if (canonical.server.listening) await canonical.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('NANO_SAVE_PAYLOAD: a proof file that already exists is rewritten with mode 600', async () => {
