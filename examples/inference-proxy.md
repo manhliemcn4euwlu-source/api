@@ -189,11 +189,40 @@ about ten minutes. That is the cap doing its job (the agent stops), and a trap f
 set below a normal turn's quote. Any model id NanoGPT serves can be listed; the proxy forwards the
 body as is.
 
-Other self-hosted runtimes, as reported by llmrt on 2026-10-08 and not yet reproduced here: goose
-1.54 takes the endpoint from `OPENAI_HOST`, `OPENAI_BASE_URL` and `OPENAI_API_KEY` alone; crush 0.98
-needs a provider entry with a models array and a PTY; opencode and Codex CLI take a custom provider
-base URL, and Codex against this door wants reasoning effort "none" and a cheap model. Pi takes a
-custom OpenAI-compatible provider (install-level review by llmrt, in progress).
+Codex CLI (0.149.1, reproduced by llmrt on 2026-10-22 on their own box, not here; paid block
+`D097647F16F4654D8FD38E5C30BBCB4F4F38E8398880F5384D97AABEE81B24DB`): a provider entry in a throwaway
+`CODEX_HOME` so the operator's own login is untouched. Two settings matter. `wire_api` must be
+`responses`: Codex 0.149 refuses to load a provider with `wire_api = "chat"` and exits before any
+request, so nothing is signed or paid; with `responses` it POSTs `/v1/responses`, the proxy forwards
+the path unchanged and NanoGPT quotes it. And the per-call limit must clear a full Codex turn's
+quote, not a chat call's: Codex sends its system prompt, tool definitions and skill descriptions on
+every request, and a one-line prompt was quoted 0.178 XNO (about 27,000 tokens on gpt-5-nano) where
+the same prompt by curl against `/v1/chat/completions` was quoted 0.0000282 XNO. The setup block's
+`NANO_MAX_PER_CALL=0.02` refuses such a turn `over_per_call_limit` with nothing signed; 0.3 let it
+through, and the door refunded 0.174 of the 0.178 after the turn, so the charge was 0.004 and the
+limit is set by the quote. Codex warns that it has no model metadata for `gpt-5-nano`; the turn
+completes, the warning is about Codex's own context and pricing tables.
+
+```toml
+model = "gpt-5-nano"
+model_provider = "nanoproxy"
+
+[model_providers.nanoproxy]
+base_url = "http://127.0.0.1:3402/v1"
+env_key = "PROXY_KEY"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+```
+
+`env_key` names the proxy key as the bearer the runtime presents, the one credential the proxy
+requires and strips before the door. The two retry settings at 0 keep a refusal from being retried
+into a second quote.
+
+Other self-hosted runtimes, as reported by llmrt on 2026-10-08 and not yet reproduced: goose 1.54
+takes the endpoint from `OPENAI_HOST`, `OPENAI_BASE_URL` and `OPENAI_API_KEY` alone; crush 0.98
+needs a provider entry with a models array and a PTY; opencode takes a custom provider base URL.
+Pi takes a custom OpenAI-compatible provider (install-level review by llmrt, in progress).
 
 ## What this is not
 
@@ -221,12 +250,13 @@ with a fix and credit in the changelog.
 
 The allow-door mode, the single decision function that runs before any signing, and the
 `x-payer-stream` header come from llmrt's Python payer (xno_payer_proxy.py, delivered 2026-10-08),
-with credit. The offline test suite (`npm test` at the skill root, 30 cases: both dialects, cap,
+with credit. The Codex CLI recipe above is llmrt's (2026-10-22), with credit. The offline test suite (`npm test` at the skill root, 34 cases: both dialects, cap,
 per-call limit, allow-list, host binding, resource binding, expiry and a missing expiry, a replayed
 payment id, malformed quotes, wrong network, restart, six parallel requests against room for two,
 stream wrapping and a wrapped tool call, credential headers dropped on both paths, a missing or wrong
 `PROXY_KEY` refused before the door is reached, a rebound Host and a browser Origin refused on both routes, a rejected broadcast retired by a change block, a seller that keeps the signed block and refuses and then cannot cash it, a retirement the node refuses that stays counted against the cap until it goes through, a send signed by a run that died before broadcasting settled at start-up, an RPC error before submit, a lost reply after an accepted
-broadcast, a refund pocketed, start-up refusals, a one-raw cap boundary) runs against a loopback
+broadcast, a refund pocketed, start-up refusals, a one-raw cap boundary, a status poll the door redirects and a complete step
+that answers a redirect after payment) runs against a loopback
 door and a loopback node that verifies every signature and frontier. Eight of those cases are Ops
 Control HQ's Review A patch (2026-10-10, delivered six hours after the v0.2.0 tag), which found
 the replay and resource-binding gaps as FAIL cases; the missing-expiry case is pyfile-toolkit's

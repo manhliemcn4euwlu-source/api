@@ -349,6 +349,13 @@ function asDelta(m) {
   if (Array.isArray(tool_calls)) d.tool_calls = tool_calls.map((t, i) => ({ index: i, ...t }));
   return d;
 }
+// A door answer in the 300s is never relayed or followed: the runtime would see a status with no Location (that header is
+// not passed through), and the proxy itself follows nothing after the host check. Named instead, with the Location's origin.
+function isRedirect(r) { return r.status >= 300 && r.status <= 399; }
+function redirectDetail(r) {
+  let origin = null; try { origin = new URL(r.headers.get('location') || '', cfg.upstream).origin; } catch { origin = null; }
+  return { status: r.status, location_origin: origin };
+}
 async function relay(res, r, wantStream, extra) {
   const h = { ...extra };
   for (const k of PASS) if (r.headers.get(k)) h[k] = r.headers.get(k);
@@ -416,6 +423,7 @@ async function handle(req, res) {
 
   let first;
   try { first = await send({}); } catch (e) { return refuse(res, 502, 'door_unreachable', { error: e.message }); }
+  if (isRedirect(first)) return refuse(res, 502, 'door_redirect', redirectDetail(first));
   if (first.status !== 402) return relay(res, first, wantStream, {});
   let quote;
   try { quote = parseQuote(first.status, first.headers, await first.text()); } catch (e) { return e instanceof Refuse ? refuse(res, 402, e.code, e.detail) : refuse(res, 502, 'quote_unreadable', { error: e.message }); }
@@ -489,9 +497,10 @@ async function handle(req, res) {
   // complete, and re-poll on a 402 from the complete step. Bounded: about 90 s in all, then the runtime is told the hash
   // and payment id so the same body can be completed by hand within the quote's life.
   const completeInit = () => ({ method: req.method, headers: doorHeaders(req, { 'x-x402': 'nano', 'x-x402-payment-id': quote.paymentId }), body, redirect: 'manual' });
-  // Status answers: a JSON with status/readyToComplete when the door tracks it; anything else (404, HTML, timeout) counts as
-  // "cannot tell" and the complete step is simply tried.
-  const paidAtDoor = async () => { try { const x = await fetch(quote.statusUrl); if (!x.ok) return null; const s = await x.json(); return !!(s.readyToComplete === true || s.status === 'paid' || s.status === 'completed'); } catch { return null; } };
+  // Status answers: a JSON with status/readyToComplete when the door tracks it; anything else (404, HTML, timeout, or a
+  // redirect, which is never followed: the status URL passed the host check, a Location would not) counts as "cannot tell"
+  // and the complete step is simply tried (ClawHub's scanner on 0.3.10, 2026-10-22).
+  const paidAtDoor = async () => { try { const x = await fetch(quote.statusUrl, { redirect: 'manual' }); if (!x.ok) return null; const s = await x.json(); return !!(s.readyToComplete === true || s.status === 'paid' || s.status === 'completed'); } catch { return null; } };
   let r = null, lastErr = null;
   const deadline = Date.now() + 90000;
   for (let attempt = 0; attempt < 30 && Date.now() < deadline; attempt++) {
@@ -503,6 +512,7 @@ async function handle(req, res) {
     r = null;
   }
   if (!r) { paid.entry.status = 'paid_not_served'; persist(); return refuse(res, 502, 'complete_unreachable', { error: lastErr ? lastErr.message : 'door did not see the payment within 90 s', hash: paid.entry.hash, paymentId: quote.paymentId, completeUrl: quote.completeUrl }); }
+  if (isRedirect(r)) { paid.entry.status = 'paid_not_served'; persist(); return refuse(res, 502, 'door_redirect', { ...redirectDetail(r), hash: paid.entry.hash, paymentId: quote.paymentId, completeUrl: quote.completeUrl }); }
   paid.entry.status = r.ok ? 'served' : 'paid_not_served';
   if (r.headers.get('x-x402-reconciliation-amount')) paid.entry.reconciliation = r.headers.get('x-x402-reconciliation-amount');
   persist();
