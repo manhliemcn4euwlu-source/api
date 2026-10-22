@@ -198,8 +198,8 @@ the path unchanged and NanoGPT quotes it. And the per-call limit must clear a fu
 quote, not a chat call's: Codex sends its system prompt, tool definitions and skill descriptions on
 every request, and a one-line prompt was quoted 0.178 XNO (about 27,000 tokens on gpt-5-nano) where
 the same prompt by curl against `/v1/chat/completions` was quoted 0.0000282 XNO. The setup block's
-`NANO_MAX_PER_CALL=0.02` refuses such a turn `over_per_call_limit` with nothing signed; 0.3 let it
-through, and the door refunded 0.174 of the 0.178 after the turn, so the charge was 0.004 and the
+`NANO_MAX_PER_CALL=0.01` (and the 0.001 default) refuses such a turn `over_per_call_limit` with
+nothing signed; 0.3 let it through, and the door refunded 0.174 of the 0.178 after the turn, so the charge was 0.004 and the
 limit is set by the quote. Codex warns that it has no model metadata for `gpt-5-nano`; the turn
 completes, the warning is about Codex's own context and pricing tables.
 
@@ -218,6 +218,15 @@ stream_max_retries = 0
 `env_key` names the proxy key as the bearer the runtime presents, the one credential the proxy
 requires and strips before the door. The two retry settings at 0 keep a refusal from being retried
 into a second quote.
+
+A door other than NanoGPT, in the x402 v2 `exact` shape: llmrt ran the proxy unmodified (0.3.10,
+719536d) against pyfile-toolkit's pay-per-query door with `NANO_ALLOW_PAYTO` pinned to that door's
+fixed `payTo` and a 0.05 XNO cap, on 2026-10-22; one 0.001 XNO send (block
+`4F3215011D1E07174A35E12B3E641F9C6F22A423609913946753AC8C2DA7A4A3`, confirmed on this node), served,
+state kind `exact`, paid 1, refused 0. The `payment-required` reader takes the `accepts[]` entry
+whose scheme is `exact` and network `nano:mainnet`, so a supplier door that answers the standard v2
+shape is payable by an operator running this proxy without a change; and a fixed `payTo` is what
+makes the allow-list testable, which NanoGPT's rotating deposit address does not allow.
 
 Other self-hosted runtimes, as reported by llmrt on 2026-10-08 and not yet reproduced: goose 1.54
 takes the endpoint from `OPENAI_HOST`, `OPENAI_BASE_URL` and `OPENAI_API_KEY` alone; crush 0.98
