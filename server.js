@@ -353,12 +353,18 @@ async function creditForUnlocked(hash) {
   if (checkout === null) return { error: 'cannot check the payer account right now (node unavailable, or the send is under a minute old and a fee block may still follow it); nothing credited, retry in a minute' };
   if (checkout) { noCredit.set(hash, NO_CREDIT_REASON); return { error: NO_CREDIT_REASON }; }
   const amount = BigInt(b.amount);
-  if (amount > MAX_CREDIT_RAW) return { error: 'send too large to be a payment; max 1 NANO per hash' };
-  credits[hash] = amount.toString();
+  // README: "Overpayment stays as credit on that hash, capped at 1 NANO per hash". The cap is a ceiling on the
+  // credit, not a refusal of the payment: a send above it is real money on chain, so refusing it whole left the payer
+  // with nothing recorded while the block sat confirmed. Credit the ceiling and name the excess, so the payer can see
+  // what was not applied. A tranche is excluded earlier, by the purpose registry and the fee-passthrough check, so
+  // this path only sees payments.
+  const credited = amount > MAX_CREDIT_RAW ? MAX_CREDIT_RAW : amount;
+  credits[hash] = credited.toString();
   save();
   creditAccounts[hash] = b.block_account; saveCreditAccounts();
   rememberPayer(b.block_account);
-  return { remaining: amount };
+  if (credited < amount) return { remaining: credited, capped: true, amount_raw: amount.toString(), excess_raw: (amount - credited).toString() };
+  return { remaining: credited };
 }
 
 function nano(raw) {   // exact decimal NANO string for a raw amount (no float rounding)
@@ -1336,5 +1342,5 @@ if (require.main === module) {
     cohorts.warm();
   });
 }
-module.exports = { shapeAccountInfo, logReq, reqLogFor, REQ_LOG, feePassthrough, FEE_COLLECTORS, checkoutWallet, workFor, send, acceptsGzip, isPrivate, expand6, checkFetchUrl, fetchText, chargeX402, creditFor,
+module.exports = { shapeAccountInfo, logReq, reqLogFor, REQ_LOG, feePassthrough, FEE_COLLECTORS, checkoutWallet, workFor, send, acceptsGzip, isPrivate, expand6, checkFetchUrl, fetchText, chargeX402, creditFor, loadPurposes,
   server, credits, X402_CONFIRM, FETCH_BOUNDS };   // server (the http.Server, not listening), credits, X402_CONFIRM and FETCH_BOUNDS for tests
