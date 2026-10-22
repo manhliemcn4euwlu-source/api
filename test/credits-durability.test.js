@@ -52,6 +52,12 @@ test('writeJsonAtomic replaces the file whole, and a reader never sees a partial
   assert.equal(fs.readdirSync(dir).filter(n => n.includes('.tmp')).length, 0, 'no temp file is left behind');
 });
 
+test('writeJsonAtomic makes the first write recoverable immediately', () => {
+  const dir = tmpdir(), f = path.join(dir, 'credits.json');
+  writeJsonAtomic(f, { AB: '1' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(f + '.bak', 'utf8')), { AB: '1' });
+});
+
 test('writeJsonAtomic keeps a .bak of the last good ledger, and the damaged file is never the .bak', () => {
   const dir = tmpdir(), f = path.join(dir, 'credits.json');
   writeJsonAtomic(f, { AB: '1' });
@@ -69,6 +75,26 @@ test('a damaged ledger with a good .bak loads the .bak and says so', () => {
   assert.deepEqual(r.value, { AB: '1' }, 'the last complete ledger is used');
   assert.equal(r.recovered, true);
   assert.equal(r.damaged, true);
+});
+
+test('writeJsonAtomic preserves a good .bak when rename fails during recovery from a damaged primary', () => {
+  const dir = tmpdir(), f = path.join(dir, 'credits.json');
+  writeJsonAtomic(f, { AB: '1' });
+  writeJsonAtomic(f, { AB: '2' });
+  fs.writeFileSync(f, '{"AB":"2"'); // damaged primary; .bak still has the last complete ledger
+
+  const before = readJsonStore(f);
+  assert.equal(before.recovered, true);
+  assert.deepEqual(before.value, { AB: '1' });
+
+  assert.throws(
+    () => writeJsonAtomic(f, { AB: '3' }, { renameSync: () => { throw new Error('rename failed'); } }),
+    /rename failed/
+  );
+  assert.deepEqual(JSON.parse(fs.readFileSync(f + '.bak', 'utf8')), { AB: '1' });
+  const after = readJsonStore(f);
+  assert.equal(after.recovered, true);
+  assert.deepEqual(after.value, { AB: '1' });
 });
 
 test('the facilitator settlement list survives a crash: /stats must not lose every settled block', () => {
