@@ -17,7 +17,8 @@ payment path is this short? Every payment, decision and cost is published.
 3. Retry with the header `X-Nano-Payment: <hash of your send block>`.
 
 Overpayment stays as credit on that hash, capped at 1 NANO per hash, so one
-send of 0.05 NANO covers 50 calls. The server checks the block on its own
+send of 0.05 NANO covers 50 calls. A send past the cap is credited at 1 NANO
+and the reply names the excess. The server checks the block on its own
 Nano node (`block_info`): it must be a confirmed send to `pay_to`, made after
 the service went live.
 
