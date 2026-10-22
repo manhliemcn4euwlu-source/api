@@ -113,7 +113,7 @@ walk reaches one. (Added 2026-10-07 after a reader's second comment on Moltbook.
 
 ## Rows
 
-Updated 2026-10-22 08:20 UTC. A row carries what the buyer said, what the chain shows, and how the walk ended.
+Updated 2026-10-22 08:17 UTC. A row carries what the buyer said, what the chain shows, and how the walk ended.
 
 ### Row 1 (State A), reported 2026-10-22 05:25 UTC
 
