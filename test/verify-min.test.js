@@ -9,11 +9,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 process.env.NANO_RPC = 'http://node.test/rpc';
 const DATA_DIR = path.join(__dirname, '..', 'data') + path.sep;
+const inData = (p) => String(p).startsWith(DATA_DIR);
 const realWrite = fs.writeFileSync, realAppend = fs.appendFileSync;
-fs.writeFileSync = (p, ...a) => { if (String(p).startsWith(DATA_DIR)) return; return realWrite(p, ...a); };
-fs.appendFileSync = (p, ...a) => { if (String(p).startsWith(DATA_DIR)) return; return realAppend(p, ...a); };
+const realOpen = fs.openSync, realRename = fs.renameSync, realCopy = fs.copyFileSync, realUnlink = fs.unlinkSync;
+const SCRATCH = path.join(require('node:os').tmpdir(), 'verify-min-scratch-' + process.pid);
+fs.writeFileSync = (p, ...a) => { if (inData(p)) return; return realWrite(p, ...a); };
+fs.appendFileSync = (p, ...a) => { if (inData(p)) return; return realAppend(p, ...a); };
+fs.openSync = (p, ...a) => (inData(p) ? realOpen(SCRATCH, 'w') : realOpen(p, ...a));
+fs.renameSync = (p, ...a) => { if (inData(p)) return; return realRename(p, ...a); };
+fs.copyFileSync = (p, ...a) => { if (inData(p)) return; return realCopy(p, ...a); };
+fs.unlinkSync = (p) => { if (inData(p)) return; return realUnlink(p); };
 const { server } = require('../server');
-after(() => { fs.writeFileSync = realWrite; fs.appendFileSync = realAppend; });
+after(() => {
+  fs.writeFileSync = realWrite; fs.appendFileSync = realAppend;
+  fs.openSync = realOpen; fs.renameSync = realRename; fs.copyFileSync = realCopy; fs.unlinkSync = realUnlink;
+  try { realUnlink(SCRATCH); } catch {}
+});
 
 const TO = 'nano_1xug1q5t7nxoj3ywwzokiea9jz8fq8qfgzp8pbyfr3co3e5xgj755uofu8ue';
 const FROM = 'nano_3njeurfzgpwpnqjxoytfnqa7ezbgkordga8e8jg74ey77kww5d5emjjyzrhp';

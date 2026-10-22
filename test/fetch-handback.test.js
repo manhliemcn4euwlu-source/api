@@ -17,14 +17,26 @@ const N = require('nanocurrency');
 const undici = require('undici');
 const { encodePaymentSignatureHeader } = require('@x402/core/http');
 process.env.NANO_RPC = 'http://node.test/rpc';
-// Every write under data/ is dropped: the live credits, x402 log, payers and checks files are untouched.
+// Every write under data/ is dropped (including writeJsonAtomic's openSync + renameSync): the live credits, x402 log,
+// payers and checks files are untouched.
 const DATA_DIR = path.join(__dirname, '..', 'data') + path.sep;
+const inData = (p) => String(p).startsWith(DATA_DIR);
 const realWrite = fs.writeFileSync, realAppend = fs.appendFileSync;
-fs.writeFileSync = (p, ...a) => { if (String(p).startsWith(DATA_DIR)) return; return realWrite(p, ...a); };
-fs.appendFileSync = (p, ...a) => { if (String(p).startsWith(DATA_DIR)) return; return realAppend(p, ...a); };
-const { fetchText, checkFetchUrl, server, credits, X402_CONFIRM } = require('../server');
+const realOpen = fs.openSync, realRename = fs.renameSync, realCopy = fs.copyFileSync, realUnlink = fs.unlinkSync;
+const SCRATCH = path.join(require('node:os').tmpdir(), 'fetch-handback-scratch-' + process.pid);
+fs.writeFileSync = (p, ...a) => { if (inData(p)) return; return realWrite(p, ...a); };
+fs.appendFileSync = (p, ...a) => { if (inData(p)) return; return realAppend(p, ...a); };
+fs.openSync = (p, ...a) => (inData(p) ? realOpen(SCRATCH, 'w') : realOpen(p, ...a));
+fs.renameSync = (p, ...a) => { if (inData(p)) return; return realRename(p, ...a); };
+fs.copyFileSync = (p, ...a) => { if (inData(p)) return; return realCopy(p, ...a); };
+fs.unlinkSync = (p) => { if (inData(p)) return; return realUnlink(p); };
+const { fetchText, checkFetchUrl, server, credits, loadPurposes, X402_CONFIRM } = require('../server');
 const x402 = require('../x402');
-after(() => { fs.writeFileSync = realWrite; fs.appendFileSync = realAppend; });
+after(() => {
+  fs.writeFileSync = realWrite; fs.appendFileSync = realAppend;
+  fs.openSync = realOpen; fs.renameSync = realRename; fs.copyFileSync = realCopy; fs.unlinkSync = realUnlink;
+  try { realUnlink(SCRATCH); } catch {}
+});
 
 test('a lookup failure inside fetchText is flagged for hand-back, and a pre-checked url is not looked up again', async () => {
   const real = dnsp.lookup; let lookups = 0;
@@ -117,4 +129,73 @@ test('the /v1/fetch handler hands a mid-body cut back: credit restored on the x4
   assert.equal(res.headers['x-nano-credit-remaining-raw'], AMOUNT.toString());
   assert.equal(credits[hash], AMOUNT.toString(), 'the price is back on the settled block hash');
   assert.equal(calls.filter(a => a === 'process').length, 1);
+
+  // The handed-back 502 must not be cached in `served` as a replayable reply, and the x402 settlement already recorded
+  // the payer account so retrying with X-Nano-Payment (as the 502 note instructs) spends the restored credit without
+  // needing another block_info lookup.
+  await loadPurposes();
+  const blockInfoBefore = calls.filter(a => a === 'block_info').length;
+  const retryEcho = response();
+  await server.listeners('request')[0]({ url: '/v1/echo?msg=after-handback', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': hash }, socket: { remoteAddress: '127.0.0.1' } }, retryEcho);
+  assert.equal(retryEcho.status, 200, JSON.stringify(retryEcho.body));
+  assert.equal(retryEcho.body.echo, 'after-handback');
+  assert.equal(retryEcho.headers['x-nano-credit-remaining-raw'], '0');
+  assert.equal(credits[hash], '0');
+  assert.equal(calls.filter(a => a === 'block_info').length, blockInfoBefore, 'payer account was recorded at x402 settlement');
+
+  // Re-presenting the failed /v1/fetch call (over x402 or bearer) is refused as spent, never replayed as a 502 with a stale credit header.
+  const againX402 = response();
+  await server.listeners('request')[0](req, againX402);
+  assert.equal(againX402.status, 402, JSON.stringify(againX402.body));
+  assert.equal(againX402.headers['x-nano-replay'], undefined);
+  const againBearer = response();
+  await server.listeners('request')[0]({ url: '/v1/fetch?url=http://target.test/cut', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': hash }, socket: { remoteAddress: '127.0.0.1' } }, againBearer);
+  assert.equal(againBearer.status, 402, JSON.stringify(againBearer.body));
+  assert.equal(againBearer.headers['x-nano-replay'], undefined);
+
+  // Meanwhile the 200 reply the restored credit actually bought is replayed when re-presented.
+  const replayEcho = response();
+  await server.listeners('request')[0]({ url: '/v1/echo?msg=after-handback', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': hash }, socket: { remoteAddress: '127.0.0.1' } }, replayEcho);
+  assert.equal(replayEcho.status, 200, JSON.stringify(replayEcho.body));
+  assert.equal(replayEcho.headers['x-nano-replay'], 'true');
+}));
+
+test('a handed-back /v1/fetch on a multi-call bearer hash does not overwrite an earlier 200 replay', viaLocal(async () => {
+  await loadPurposes();
+  const h2 = 'EF'.repeat(32);
+  const payer2 = 'nano_3njeurfzgpwpnqjxoytfnqa7ezbgkordga8e8jg74ey77kww5d5emjjyzrhp';
+  globalThis.fetch = async (url, opts) => {
+    const b = JSON.parse(opts.body);
+    if (b.action === 'block_info' && b.hash === h2)
+      return { ok: true, json: async () => ({ block_account: payer2, subtype: 'send', amount: (2n * AMOUNT).toString(), confirmed: 'true', height: '3', local_timestamp: '1758000000', contents: { link_as_account: PAY_TO } }) };
+    if (b.action === 'account_history')
+      return { ok: true, json: async () => ({ history: [{ hash: h2, type: 'send', account: PAY_TO, local_timestamp: '1758000000' }] }) };
+    return { ok: true, json: async () => ({ error: 'unexpected rpc ' + b.action }) };
+  };
+  // Call 1: 200 on /v1/echo (1 call left).
+  const r1 = response();
+  await server.listeners('request')[0]({ url: '/v1/echo?msg=first', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': h2 }, socket: { remoteAddress: '127.0.0.1' } }, r1);
+  assert.equal(r1.status, 200);
+  // Call 2: 502 hand-back on /v1/fetch (still 1 call left; must not overwrite Call 1 in `served`).
+  const r2 = response();
+  await server.listeners('request')[0]({ url: '/v1/fetch?url=http://target.test/cut', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': h2 }, socket: { remoteAddress: '127.0.0.1' } }, r2);
+  assert.equal(r2.status, 502);
+  assert.equal(credits[h2], AMOUNT.toString());
+  // Spend the remaining credit on a second 502 hand-back and then drain it to 0 so replayIfServed is consulted.
+  credits[h2] = '0';
+  const r3 = response();
+  await server.listeners('request')[0]({ url: '/v1/fetch?url=http://target.test/cut', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': h2 }, socket: { remoteAddress: '127.0.0.1' } }, r3);
+  assert.equal(r3.status, 402, 'handed-back 502 is not replayed when credit is exhausted');
+  const r4 = response();
+  await server.listeners('request')[0]({ url: '/v1/echo?msg=first', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': h2 }, socket: { remoteAddress: '127.0.0.1' } }, r4);
+  assert.equal(r4.status, 200, 'earlier 200 reply on the hash is still replayed');
+  assert.equal(r4.headers['x-nano-replay'], 'true');
+  assert.equal(r4.body.echo, 'first');
 }));
