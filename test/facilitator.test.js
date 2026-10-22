@@ -1,10 +1,28 @@
 // node --test  (run from api/). Facilitator request handlers with a mocked node.
 'use strict';
-const { test, before, beforeEach } = require('node:test');
+const { test, before, beforeEach, after } = require('node:test');
 const assert = require('node:assert/strict');
-process.env.BROADCAST_FILE = require("node:path").join(require("node:os").tmpdir(), "pursekeeper-broadcast-test-" + process.pid + ".json");   // the own-broadcast memory is on disk since 2026-09-30; tests keep it out of data/
+const fs = require('node:fs');
+const path = require('node:path');
+process.env.BROADCAST_FILE = path.join(require("node:os").tmpdir(), "pursekeeper-broadcast-test-" + process.pid + ".json");   // the own-broadcast memory is on disk since 2026-09-30; tests keep it out of data/
+const DATA_DIR = path.join(__dirname, '..', 'data') + path.sep;
+const inData = (p) => String(p).startsWith(DATA_DIR);
+const realWrite = fs.writeFileSync, realAppend = fs.appendFileSync;
+const realOpen = fs.openSync, realRename = fs.renameSync, realCopy = fs.copyFileSync, realUnlink = fs.unlinkSync;
+const SCRATCH = path.join(require('node:os').tmpdir(), 'facilitator-scratch-' + process.pid);
+fs.writeFileSync = (p, ...a) => { if (inData(p)) return; return realWrite(p, ...a); };
+fs.appendFileSync = (p, ...a) => { if (inData(p)) return; return realAppend(p, ...a); };
+fs.openSync = (p, ...a) => (inData(p) ? realOpen(SCRATCH, 'w') : realOpen(p, ...a));
+fs.renameSync = (p, ...a) => { if (inData(p)) return; return realRename(p, ...a); };
+fs.copyFileSync = (p, ...a) => { if (inData(p)) return; return realCopy(p, ...a); };
+fs.unlinkSync = (p) => { if (inData(p)) return; return realUnlink(p); };
 const N = require('nanocurrency');
 const f = require('../facilitator');
+after(() => {
+  fs.writeFileSync = realWrite; fs.appendFileSync = realAppend;
+  fs.openSync = realOpen; fs.renameSync = realRename; fs.copyFileSync = realCopy; fs.unlinkSync = realUnlink;
+  try { realUnlink(SCRATCH); } catch {}
+});
 
 const PAY_TO = 'nano_1xug1q5t7nxoj3ywwzokiea9jz8fq8qfgzp8pbyfr3co3e5xgj755uofu8ue';
 const AMOUNT = 10n ** 27n;

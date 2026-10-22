@@ -395,10 +395,15 @@ function send(res, code, body, type = 'application/json') {
     'access-control-allow-headers': 'X-Nano-Payment, PAYMENT-SIGNATURE, X-PAYMENT, X-Nano-Represent, Content-Type',
     'access-control-expose-headers': 'PAYMENT-REQUIRED, PAYMENT-RESPONSE, X-Nano-Credit-Remaining-Raw, X-Nano-Payment-Hash, X-Nano-Represent, X-Nano-Replay' };
   // A reply served for a payment is remembered for a re-presentation of the same payment (replayIfServed).
-  if (res.paidHash && code >= 200 && code !== 304) {
-    const kept = {};
-    for (const k of ['payment-response', 'x-nano-credit-remaining-raw']) { const v = res.getHeader(k); if (v !== undefined) kept[k] = v; }
-    rememberServed(res.paidHash, res.replayKey, code, data, type, kept, res.replayBind);
+  // Handed-back errors (400 redirect refusal or 502 noAnswer/work failure after charge) restore the credit and are not
+  // served replies: caching >=200 non-2xx replayed the 400/502 (with its stale restored-credit header) and overwrote any
+  // earlier 200 replay on a multi-call bearer hash.
+  if (res.paidHash) {
+    if (code >= 200 && code < 300) {
+      const kept = {};
+      for (const k of ['payment-response', 'x-nano-credit-remaining-raw']) { const v = res.getHeader(k); if (v !== undefined) kept[k] = v; }
+      rememberServed(res.paidHash, res.replayKey, code, data, type, kept, res.replayBind);
+    }
     res.paidHash = null;
   }
   // Declared length since 2026-09-26: a body cut by any proxy or sandbox between here and the reader is then an
@@ -610,8 +615,9 @@ async function chargeX402Locked(req, res, payload, key) {
       return paymentRequired(res, 'x402: block ' + s.transaction + ' was broadcast but not yet confirmed; re-present the same PAYMENT-SIGNATURE with X-Nano-Represent', req, { note, represent_token: token }), false;
     }
     credits[s.transaction] = '0';
-    if (v.hash !== s.transaction) credits[v.hash] = '0';
-    save();
+    creditAccounts[s.transaction] = v.payer;
+    if (v.hash !== s.transaction) { credits[v.hash] = '0'; creditAccounts[v.hash] = v.payer; }
+    save(); saveCreditAccounts();
     if (represent[s.transaction] || represent[v.hash]) { delete represent[s.transaction]; delete represent[v.hash]; saveRepresent(); }
     x402Log.push({ hash: s.transaction, payer: v.payer, amount_raw: PRICE_RAW.toString(), resource: req.url, at: new Date().toISOString(), work_by: v.workBy || 'client' });
     rememberPayer(v.payer);

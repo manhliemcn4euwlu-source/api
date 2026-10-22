@@ -12,9 +12,16 @@ const { encodePaymentSignatureHeader } = require('@x402/core/http');
 
 process.env.NANO_RPC = 'http://node.test/rpc';
 const DATA_DIR = path.join(__dirname, '..', 'data') + path.sep;
+const inData = (p) => String(p).startsWith(DATA_DIR);
 const realWrite = fs.writeFileSync, realAppend = fs.appendFileSync;
-fs.writeFileSync = (p, ...a) => { if (String(p).startsWith(DATA_DIR)) return; return realWrite(p, ...a); };
-fs.appendFileSync = (p, ...a) => { if (String(p).startsWith(DATA_DIR)) return; return realAppend(p, ...a); };
+const realOpen = fs.openSync, realRename = fs.renameSync, realCopy = fs.copyFileSync, realUnlink = fs.unlinkSync;
+const SCRATCH = path.join(require('node:os').tmpdir(), 'charge-x402-confirm-scratch-' + process.pid);
+fs.writeFileSync = (p, ...a) => { if (inData(p)) return; return realWrite(p, ...a); };
+fs.appendFileSync = (p, ...a) => { if (inData(p)) return; return realAppend(p, ...a); };
+fs.openSync = (p, ...a) => (inData(p) ? realOpen(SCRATCH, 'w') : realOpen(p, ...a));
+fs.renameSync = (p, ...a) => { if (inData(p)) return; return realRename(p, ...a); };
+fs.copyFileSync = (p, ...a) => { if (inData(p)) return; return realCopy(p, ...a); };
+fs.unlinkSync = (p) => { if (inData(p)) return; return realUnlink(p); };
 const { chargeX402, credits, X402_CONFIRM, creditFor, send } = require('../server');
 const x402 = require('../x402');
 
@@ -45,7 +52,11 @@ before(async () => {
     return { ok: true, json: async () => a };
   };
 });
-after(() => { fs.writeFileSync = realWrite; fs.appendFileSync = realAppend; });
+after(() => {
+  fs.writeFileSync = realWrite; fs.appendFileSync = realAppend;
+  fs.openSync = realOpen; fs.renameSync = realRename; fs.copyFileSync = realCopy; fs.unlinkSync = realUnlink;
+  try { realUnlink(SCRATCH); } catch {}
+});
 
 function payment(representative) {
   const { block } = N.createBlock(sk, { work: WORK, previous: FRONTIER, representative, balance: (BALANCE - AMOUNT).toString(), link: PAY_TO });
