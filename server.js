@@ -1282,7 +1282,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (u.pathname === '/v1/credit') {
       const c = await creditFor(u.searchParams.get('hash') || '');
-      return send(res, c.error ? 400 : 200, c.error ? { error: c.error } : { remaining_raw: c.remaining.toString(), remaining_nano: nano(c.remaining) });
+      if (c.error) return send(res, 400, { error: c.error });
+      const body = { remaining_raw: c.remaining.toString(), remaining_nano: nano(c.remaining) };
+      // A send past the cap is credited at the cap, and the reply names what was not applied (pursekeeper, 2026-10-22).
+      if (c.capped) { body.capped = true; body.amount_raw = c.amount_raw; body.excess_raw = c.excess_raw; }
+      return send(res, 200, body);
     }
     if (u.pathname === '/v1/echo') {
       if (!await charge(req, res)) return;
