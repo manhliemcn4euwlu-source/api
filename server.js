@@ -683,7 +683,12 @@ async function workGenerate(req, res) {
 // Free payment checks for sellers without a Nano node: is block H a confirmed send of at least
 // N raw to address A (/v1/verify), and which confirmed sends to A are still unpocketed
 // (/v1/receivable). Read-only against this node; 60 per minute per IP.
-const checkHits = new Map();
+// One counter per route, because README gives each of the five free routes its own
+// 60 per minute per IP (llmrt, 2026-10-22, api#103). A single shared map made the
+// real allowance 60 in total across verify + receivable + account_info + process +
+// requests, so a caller that polled /v1/verify could not read /v1/receivable in the
+// same minute, and scripts/no-node.js receive died at the 30th pending send.
+const checkHits = { verify: new Map(), receivable: new Map(), account_info: new Map(), process: new Map(), requests: new Map() };
 // Persisted counters for the free checks, so third-party use of /v1/verify and
 // /v1/receivable survives restarts and can be cited at review. IPs are stored only as
 // short hashes, to count distinct callers without keeping addresses.
@@ -751,7 +756,7 @@ function minRawOf(u) {
   return null;   // neither given: /v1/verify requires one (or any=1), /v1/receivable lists everything
 }
 async function verifyBlock(req, res, u) {
-  if (overFreeLimit(req, checkHits, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+  if (overFreeLimit(req, checkHits.verify, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
   countCheck('verify', req);
   const hash = String(u.searchParams.get('hash') || '').toUpperCase();
   if (!/^[0-9A-F]{64}$/.test(hash)) return send(res, 400, { error: 'hash must be 64 hex characters (a block hash)' });
@@ -785,7 +790,7 @@ async function verifyBlock(req, res, u) {
     height: Number(b.height), local_timestamp: Number(b.local_timestamp), checked_at: new Date().toISOString(), node: 'pursekeeper.dev' });
 }
 async function receivable(req, res, u) {
-  if (overFreeLimit(req, checkHits, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+  if (overFreeLimit(req, checkHits.receivable, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
   countCheck('receivable', req);
   const account = u.searchParams.get('account') || '';
   if (!nanocurrency.checkAddress(account)) return send(res, 400, { error: 'account must be a nano_ address' });
@@ -802,7 +807,7 @@ async function receivable(req, res, u) {
 // (frontier, balance, representative, confirmation height) and process (broadcast a signed
 // state block). Both read/forward to this node only; 60 per minute per IP, counted like the checks.
 async function accountInfo(req, res, u) {
-  if (overFreeLimit(req, checkHits, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+  if (overFreeLimit(req, checkHits.account_info, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
   countCheck('account_info', req);
   const account = u.searchParams.get('account') || '';
   if (!nanocurrency.checkAddress(account)) return send(res, 400, { error: 'account must be a nano_ address' });
@@ -826,7 +831,7 @@ function shapeAccountInfo(r) {
     confirmation_height: height !== null && /^\d+$/.test(height) ? Number(height) : null };
 }
 async function processBlock(req, res) {
-  if (overFreeLimit(req, checkHits, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+  if (overFreeLimit(req, checkHits.process, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
   countCheck('process', req);
   let body;
   try { body = JSON.parse((await readBody(req, 20_000)).toString('utf8') || '{}'); } catch { return send(res, 400, { error: 'body must be JSON {block, subtype?}' }); }
@@ -1274,7 +1279,7 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/v1/account_info') return accountInfo(req, res, u);
     if (u.pathname === '/v1/process' && req.method === 'POST') return processBlock(req, res);
     if (u.pathname === '/v1/requests' && req.method === 'GET') {
-      if (overFreeLimit(req, checkHits, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+      if (overFreeLimit(req, checkHits.requests, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
       const h = String(u.searchParams.get('hash') || '').toUpperCase();
       if (!/^[0-9A-F]{64}$/.test(h)) return send(res, 400, { error: 'hash must be 64 hex characters (a block hash, or the frontier work was asked for)' });
       const entries = reqLogFor(h);
