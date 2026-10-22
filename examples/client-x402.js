@@ -203,6 +203,33 @@ async function explainFate(account, hash, previous, lastToken) {
   return fate;
 }
 
+// The proof file holds a signed block, so it is written only where this process controls the bits. A new file is created
+// here with mode 600 (`mode` applies only on creation; ClawHub's scanner on skill 0.3.5, 2026-10-20). A file that already
+// exists gets chmod 600 first and is written only if that succeeded: when the mode cannot be set, the path names a file
+// this process does not own (or a symlink to one), so the payload goes to a fresh file beside it, <path>.1, .2, ..., created
+// here so the 600 applies, and the stderr line names that file (pyfile-toolkit, 2026-10-21). If nothing can be written the
+// error is printed and the client carries on: the exit code reports the paid call, not the proof.
+function savePayload(file, body) {
+  const create = (p) => { const fd = fs.openSync(p, 'wx', 0o600); try { fs.writeFileSync(fd, body); } finally { fs.closeSync(fd); } return p; };
+  try {
+    try { return create(file); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    let modeErr;
+    try { fs.chmodSync(file, 0o600); } catch (e) { modeErr = e; }
+    if (!modeErr) { fs.writeFileSync(file, body); return file; }
+    for (let i = 1; i <= 99; i++) {
+      try {
+        const alt = create(file + '.' + i);
+        console.error('could not set mode 600 on ' + file + ': ' + modeErr.message + '; payload written to ' + alt + ' instead');
+        return alt;
+      } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    }
+    throw modeErr;
+  } catch (e) {
+    console.error('payment header NOT saved to ' + file + ': ' + e.message);
+    return null;
+  }
+}
+
 (async () => {
   if (!process.env.NANO_SEED) { console.error('set NANO_SEED (64 hex chars)'); process.exit(2); }
   const sk = N.deriveSecretKey(process.env.NANO_SEED, Number(process.env.NANO_INDEX || 0));
@@ -322,11 +349,9 @@ async function explainFate(account, hash, previous, lastToken) {
   const served = !!r && r.status >= 200 && r.status < 300;
   if (process.env.NANO_SAVE_PAYLOAD) {
     const out = { saved_at: new Date().toISOString(), url: signedUrl, method: init.method || 'GET', hash, status: r ? r.status : null, served, represent_token: lastToken, payment_signature: init.headers['payment-signature'] };
-    fs.writeFileSync(process.env.NANO_SAVE_PAYLOAD, JSON.stringify(out, null, 1) + '\n', { mode: 0o600 });
-    // `mode` above applies only when the file is created; a file that already exists keeps its bits, so set them
-    // explicitly (ClawHub's scanner on skill 0.3.5, 2026-10-20).
-    try { fs.chmodSync(process.env.NANO_SAVE_PAYLOAD, 0o600); } catch (e) { console.error('could not set mode 600 on ' + process.env.NANO_SAVE_PAYLOAD + ': ' + e.message); }
-    console.error('payment header saved to ' + process.env.NANO_SAVE_PAYLOAD + (served ? '' : ' (not served; the signed block inside is still spendable until the account\'s frontier moves)'));
+    const where = savePayload(process.env.NANO_SAVE_PAYLOAD, JSON.stringify(out, null, 1) + '\n');
+    if (where) console.error('payment header saved to ' + where + (served ? '' : ' (not served; the signed block inside is still spendable until the account\'s frontier moves)'));
+    else if (!served) console.error('the signed block was not saved anywhere; it is still spendable until the account\'s frontier moves');
   }
   // Anything but 2xx after the payment means the call was not served: exit 1, so a caller that reads only the return code
   // does not count an unserved call as done (pyfile-toolkit, 2026-10-02). The body printed above is the seller's last answer;

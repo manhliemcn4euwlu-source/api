@@ -309,6 +309,25 @@ test('NANO_SAVE_PAYLOAD: a proof file that already exists is rewritten with mode
   assert.match(JSON.parse(fs.readFileSync(proof, 'utf8')).hash, /^[0-9A-F]{64}$/);
 });
 
+test('NANO_SAVE_PAYLOAD: a path whose mode cannot be set is not written; the payload goes to a fresh 600 file beside it', async () => {
+  const m = await mock(); const dir = tmp();
+  const path = require('node:path');
+  // A symlink to /dev/null: this process can write through it but cannot chmod the target (owned by root), so the
+  // proof would land in a file whose bits the client does not control. It must go to proof.json.1 instead.
+  const proof = path.join(dir, 'proof.json');
+  fs.symlinkSync('/dev/null', proof);
+  const r = await run(m.origin, dir, { NANO_SAVE_PAYLOAD: proof });
+  await m.close();
+  assert.equal(r.code, 0, r.err);
+  const alt = proof + '.1';
+  assert.ok(fs.existsSync(alt), 'the payload is written beside the uncontrollable path: ' + r.err);
+  assert.equal(fs.statSync(alt).mode & 0o777, 0o600);
+  assert.match(JSON.parse(fs.readFileSync(alt, 'utf8')).hash, /^[0-9A-F]{64}$/);
+  assert.match(r.err, /could not set mode 600 on .*proof\.json: .*; payload written to .*proof\.json\.1 instead/);
+  assert.match(r.err, /payment header saved to .*proof\.json\.1/);
+  assert.ok(fs.lstatSync(proof).isSymbolicLink(), 'the original path is left as it was');
+});
+
 test('a live holder past NANO_LOCK_MAX_MS is refused immediately, keeps its lock, and can resume', { timeout: 15000 }, async t => {
   const m = await mock({ pauseFirstInfo: true }); const dir = tmp();
   const maxMs = 200;
