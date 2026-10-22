@@ -37,7 +37,7 @@ const randomHash = () => require('node:crypto').randomBytes(32).toString('hex').
 // opts.loseReplyOnce: the first paid call lands the block, then the socket is destroyed before any reply.
 // opts.pauseFirstInfo: pause the first account_info reply after its caller holds the lock, until resumeInfo().
 function mock(opts = {}) {
-  const state = { frontier: randomHash(), balance: '5000000000000000000000000000', chain: new Set(), issued: new Set(), landed: 0, served: 0, refused: 0, probes: 0, infoReplies: 0, paidCalls: 0 };
+  const state = { frontier: randomHash(), balance: '5000000000000000000000000000', chain: new Set(), issued: new Set(), landed: 0, served: 0, refused: 0, probes: 0, infoReplies: 0, paidCalls: 0, probeHeaders: [], paidHeaders: [] };
   const waiting = [];
   let firstInfoSeen, resumeFirstInfo, infoPaused = false;
   const firstInfo = new Promise(resolve => { firstInfoSeen = resolve; });
@@ -46,6 +46,7 @@ function mock(opts = {}) {
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     const json = (code, body, headers = {}) => { res.writeHead(code, { 'content-type': 'application/json', ...headers }); res.end(JSON.stringify(body)); };
+    const callerHeaders = () => ({ authorization: req.headers.authorization || null, apiKey: req.headers['x-api-key'] || null });
     if (u.pathname === '/v1/account_info') {
       const reply = () => { state.infoReplies++; json(200, info()); if (opts.receiveAfter && state.infoReplies === opts.receiveAfter) { state.frontier = randomHash(); state.balance = (BigInt(state.balance) + 1000n).toString(); } };
       if (opts.pauseFirstInfo && !infoPaused) { infoPaused = true; resumeFirstInfo = reply; firstInfoSeen(); return; }
@@ -58,12 +59,12 @@ function mock(opts = {}) {
     // Each quote carries its own price (base + the probe's number): ten purchases from one frontier at one price would be
     // ten byte-identical blocks, one hash, which the seller's per-hash lock does serialise; the review's case is ten
     // distinct sends (different sellers, prices or links), so the quotes differ here and so do the blocks.
-    if (!sig) { state.probes++;
-      if (opts.quoteRedirectTo) { res.writeHead(opts.quoteRedirectStatus || 307, { location: opts.quoteRedirectTo }); return res.end(); }
+    if (!sig) { state.probes++; state.probeHeaders.push(callerHeaders());
+      if (opts.quoteRedirectTo && (!opts.quoteRedirectOnce || state.probes === 1)) { res.writeHead(opts.quoteRedirectStatus || 307, { location: opts.quoteRedirectTo }); return res.end(); }
       const amount = (BigInt(AMOUNT) + BigInt(state.probes)).toString(); state.issued.add(amount);
       const pr = { x402Version: 2, resource: { url: 'http://127.0.0.1/buy' }, accepts: [{ scheme: 'exact', network: 'nano:mainnet', asset: 'XNO', amount, payTo: PAY_TO, maxTimeoutSeconds: 60, extra: { work: 'optional' } }] };
       return json(402, { x402: pr }, { 'payment-required': b64(pr) }); }
-    state.paidCalls++;
+    state.paidCalls++; state.paidHeaders.push(callerHeaders());
     if (opts.redirectTo) { res.writeHead(opts.redirectStatus || 307, { location: opts.redirectTo }); return res.end(); }
     let block; try { block = unb64(sig).payload.block; } catch { state.refused++; return json(402, { error: 'bad payment header' }); }
     if (String(block.previous).toUpperCase() !== state.frontier) { state.refused++; return json(402, { error: 'block.previous is not the account frontier (' + state.frontier + ')' }); }
@@ -293,6 +294,53 @@ test('unsigned quote may redirect, but the signed call uses the URL that returne
   } finally {
     if (entry.server.listening) await entry.close();
     if (canonical.server.listening) await canonical.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unsigned quote redirected to another origin while HEADERS are set: refused before signing (exit 6), the other origin receives nothing', async () => {
+  // ClawHub's scanner on skill 0.3.11 (2026-10-22, rule T09): the quote followed a cross-origin redirect and the signed
+  // request then carried the caller's HEADERS to the origin that answered 402, so a seller could collect a credential
+  // given for another service. Now a hop to another origin is refused while HEADERS are set, before anything is sent there.
+  const other = await mock();
+  const entry = await mock({ quoteRedirectTo: other.origin + '/buy', quoteRedirectStatus: 307 });
+  const dir = tmp();
+  try {
+    const r = await run(entry.origin, dir, { HEADERS: '{"authorization":"Bearer for-entry-only","x-api-key":"entry-key"}' });
+    await Promise.all([entry.close(), other.close()]);
+    assert.equal(r.code, 6, r.err);
+    assert.equal(entry.state.probes, 1, 'the entry origin was asked once');
+    assert.deepEqual(entry.state.probeHeaders[0], { authorization: 'Bearer for-entry-only', apiKey: 'entry-key' }, 'the headers went to the origin they were given for');
+    assert.equal(other.state.probes, 0, 'the other origin received no quote request');
+    assert.equal(other.state.paidCalls, 0, 'the other origin received no signed request');
+    assert.equal(entry.state.infoReplies, 0, 'no account read, nothing signed');
+    assert.match(r.err, /refusing: the quote at .* redirected \(HTTP 307\) to /);
+    assert.ok(r.err.includes(other.origin + ', another origin'), r.err);
+    assert.doesNotMatch(r.err, /signed block/);
+  } finally {
+    if (entry.server.listening) await entry.close();
+    if (other.server.listening) await other.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unsigned quote redirected within its own origin while HEADERS are set: followed with the headers, the signed call goes to the URL that answered 402 and is served', async () => {
+  const m = await mock({ quoteRedirectTo: '/buy?canonical=1', quoteRedirectStatus: 307, quoteRedirectOnce: true });
+  const dir = tmp();
+  const proof = path.join(dir, 'same-origin-proof.json');
+  try {
+    const r = await run(m.origin, dir, { HEADERS: '{"authorization":"Bearer for-this-origin"}', NANO_SAVE_PAYLOAD: proof });
+    await m.close();
+    assert.equal(r.code, 0, r.err);
+    assert.equal(m.state.probes, 2, 'the redirect was followed to the second quote');
+    assert.deepEqual(m.state.probeHeaders.map(h => h.authorization), ['Bearer for-this-origin', 'Bearer for-this-origin'], 'the headers travelled on both hops within the origin');
+    assert.equal(m.state.paidCalls, 1); assert.equal(m.state.served, 1);
+    assert.equal(m.state.paidHeaders[0].authorization, 'Bearer for-this-origin');
+    const saved = JSON.parse(fs.readFileSync(proof, 'utf8'));
+    assert.equal(saved.url, m.origin + '/buy?canonical=1');
+    assert.equal(saved.served, true);
+  } finally {
+    if (m.server.listening) await m.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
