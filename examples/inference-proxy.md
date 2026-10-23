@@ -6,7 +6,7 @@ agent's own wallet, inside a cumulative cap the operator set before starting it.
 named there start at this tag and are paid on delivery).
 
 Who it is for: an operator who already holds Nano, or buys it at an exchange or at Nanswap, and runs a
-self-hosted agent runtime (OpenClaw, Pi, opencode, Codex CLI, goose, crush, anything that takes an
+self-hosted agent runtime (OpenClaw, Pi, opencode, Codex CLI, Claude Code, goose, crush, anything that takes an
 OpenAI-compatible base URL). The agent's model calls go to NanoGPT's accountless door
 (https://nano-gpt.com/api/x402, hundreds of models, quoted per request, no account) and are paid from a
 wallet the operator funded. Hosted runtimes (ChatGPT projects, hosted Claude, anything with no
@@ -219,6 +219,25 @@ stream_max_retries = 0
 requires and strips before the door. The two retry settings at 0 keep a refusal from being retried
 into a second quote.
 
+Claude Code (2.1.309, reproduced by llmrt on 2026-10-23 on their own box, not here; paid block
+`3CE97417B50885DED03843000A60AA5AD45BA3B09CDE87C57106700EF8BF0614`, confirmed on this node): Claude
+Code speaks the Anthropic Messages API at `/v1/messages`, which NanoGPT's accountless door does not
+serve, so the proxy alone cannot carry it. llmrt's `anthropic-shim.js` (about 140 lines, no
+dependencies, CC0, at
+https://github.com/manhliemcn4euwlu-source/llmrt-deliveries/tree/main/claude-nano) sits in front of
+the unmodified proxy: `/v1/messages` becomes `/v1/chat/completions`, system prompts, `tool_use` and
+`tool_result` blocks map to the OpenAI shapes and back, `finish_reason: tool_calls` comes back as a
+`tool_use` block so an agent loop runs its tool, `stream: true` is answered with the Anthropic event
+sequence built from one plain completion, and the refusal codes pass through unchanged. Run with
+`ANTHROPIC_BASE_URL` pointed at the shim and any `ANTHROPIC_API_KEY`. The figures: a 24-token probe
+through the shim cost 0.00003379 XNO; one Claude Code turn on a one-line prompt cost 0.04461997 XNO,
+about 1,300 times more, because the runtime sends its system prompt and tool definitions on every
+turn, so the per-call limit must clear a turn's quote (0.01 refused it `over_per_call_limit` with
+nothing signed, 0.05 let it through). Two notes from the run: Claude Code warns that it does not
+recognise a door-specific model id and assumes a 200k window, which a Claude-shaped alias in
+`ANTHROPIC_MODEL` translated by the shim's `SHIM_MODEL` avoids; and the shim must answer `stream:
+true`, which Claude Code asks for on some paths even for a one-line prompt.
+
 A door other than NanoGPT, in the x402 v2 `exact` shape: llmrt ran the proxy unmodified (0.3.10,
 719536d) against pyfile-toolkit's pay-per-query door with `NANO_ALLOW_PAYTO` pinned to that door's
 fixed `payTo` and a 0.05 XNO cap, on 2026-10-22; one 0.001 XNO send (block
@@ -259,7 +278,7 @@ with a fix and credit in the changelog.
 
 The allow-door mode, the single decision function that runs before any signing, and the
 `x-payer-stream` header come from llmrt's Python payer (xno_payer_proxy.py, delivered 2026-10-08),
-with credit. The Codex CLI recipe above is llmrt's (2026-10-22), with credit. The offline test suite (`npm test` at the skill root, 34 cases: both dialects, cap,
+with credit. The Codex CLI recipe above is llmrt's (2026-10-22), with credit, and so is the Claude Code shim and recipe (2026-10-23). The offline test suite (`npm test` at the skill root, 34 cases: both dialects, cap,
 per-call limit, allow-list, host binding, resource binding, expiry and a missing expiry, a replayed
 payment id, malformed quotes, wrong network, restart, six parallel requests against room for two,
 stream wrapping and a wrapped tool call, credential headers dropped on both paths, a missing or wrong
