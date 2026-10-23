@@ -69,3 +69,26 @@ test('each route stops at its own 60, and the neighbour is unaffected', async ()
   assert.equal((await get('/v1/verify?hash=' + H + '&any=1', ip)).status, 200);
   assert.ok(rpcCalls > 0, 'the mocked node was reached, so the 200s are real answers');
 });
+
+// llmrt, 2026-10-23: /v1/credit was the sixth free route and the only one with no counter. Every call about a hash the
+// server has not stored reaches the node (creditForUnlocked -> block_info), so a caller asking about fresh hashes drove one
+// node lookup per request without limit: 65 distinct hashes from one IP answered 400 "block not found" and none answered
+// 429, while /v1/verify from the same host answered 429 at the 61st call in the same window.
+test('/v1/credit carries the same 60 per minute per IP as the other free routes', async () => {
+  const ip = '198.51.100.15';
+  let statuses = [];
+  for (let i = 0; i < 60; i++) statuses.push((await get('/v1/credit?hash=' + freshHash(i), ip)).status);
+  assert.ok(statuses.every(s => s === 400), 'the first 60 credit calls are answered from the source, got ' + JSON.stringify(statuses));
+  const over = await get('/v1/credit?hash=' + freshHash(60), ip);
+  assert.equal(over.status, 429, 'the 61st credit call must be refused');
+  assert.match(over.body.error, /60 checks per minute/);
+  assert.ok(Number(over.headers['retry-after']) >= 1, 'the refusal says when to come back');
+  // Its own allowance: the neighbour routes are untouched by credit being spent.
+  assert.equal((await get('/v1/requests?hash=' + H, ip)).status, 200);
+  assert.equal((await get('/v1/verify?hash=' + H + '&any=1', ip)).status, 200);
+});
+
+function freshHash(n) {
+  const hex = n.toString(16).toUpperCase().padStart(2, '0');
+  return hex.repeat(32);
+}
