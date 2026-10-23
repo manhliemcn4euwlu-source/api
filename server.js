@@ -1402,7 +1402,10 @@ const server = http.createServer(async (req, res) => {
       const entries = reqLogFor(h, limit, cursor), total = reqLogCount(h);
       const nextCursor = cursor + entries.length;
       const more = nextCursor < total;
-      return send(res, 200, { hash: h, found: entries.length > 0, entries, total, cursor, next_cursor: more ? nextCursor : null,
+      // found is about the hash, not about this page: a cursor past the end answers an empty page for a hash that was used
+      // 5,001 times, and `found: false` there would read as "pursekeeper.dev was not used for this block", which is the one
+      // question this route exists to answer. The first version of the cursor keyed it on the page's own length.
+      return send(res, 200, { hash: h, found: total > 0, entries, total, cursor, next_cursor: more ? nextCursor : null,
         // The bound is the answer's own: a reader who needs every entry pages with `limit` and `cursor` rather than reading
         // the newest 20 as the whole log, which is what this route did until 2026-10-23 (llmrt).
         truncated: more,

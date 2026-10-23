@@ -119,6 +119,14 @@ test('a hash with more than 5,000 entries can be read in full, exactly once each
     assert.equal(past.status, 200);
     assert.equal(past.body.entries.length, 0, 'a cursor past the end answers an empty page, not the first one');
     assert.equal(past.body.next_cursor, null);
+    // found answers the route's own question — was this hash used here — so an empty page for a used hash still says true.
+    // Keyed on the page's length instead, a cursor past the end answered found:false with total:5001, which reads as
+    // "pursekeeper.dev was not used for that block" and is the one wrong answer this route exists to prevent.
+    assert.equal(past.body.total, N);
+    assert.equal(past.body.found, true, 'a used hash stays found on a page past the end');
+    const unused = await get('/v1/requests?hash=' + 'E'.repeat(64));
+    assert.equal(unused.body.found, false, 'an unused hash is the only case that answers found:false');
+    assert.equal(unused.body.total, 0);
   } finally {
     if (before === null) fs.unlinkSync(REQ_LOG); else fs.writeFileSync(REQ_LOG, before);
   }
