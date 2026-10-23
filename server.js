@@ -782,8 +782,14 @@ async function verifyBlock(req, res, u) {
   countCheck('verify', req);
   const hash = String(u.searchParams.get('hash') || '').toUpperCase();
   if (!/^[0-9A-F]{64}$/.test(hash)) return send(res, 400, { error: 'hash must be 64 hex characters (a block hash)' });
-  const to = u.searchParams.get('to');
-  if (to && !nanocurrency.checkAddress(to)) return send(res, 400, { error: 'to must be a nano_ address' });
+  // A Nano address has two spellings of the same account: nano_ and the pre-rename xrb_. checkAddress accepts both, and the
+  // chain reports every destination as nano_, so an xrb_ spelling used to compare unequal to the block's own link and answer
+  // ok:false "sent to nano_..., not to xrb_..." for the very account the block paid (llmrt, 2026-10-23). The facilitator
+  // normalises payTo the same way (facilitator.js nanoPrefix); this route now does too, and the answer echoes the address in
+  // its canonical nano_ spelling.
+  const toRaw = u.searchParams.get('to');
+  const to = toRaw ? toRaw.replace(/^xrb_/, 'nano_') : toRaw;
+  if (to && !nanocurrency.checkAddress(to)) return send(res, 400, { error: 'to must be a nano_ address (or the same address in its xrb_ spelling)' });
   let minRaw; try { minRaw = minRawOf(u); } catch (e) { return send(res, 400, { error: e.message }); }
   // Without a minimum the amount was never checked and ok:true read as "paid" to a seller that forgot the parameter
   // (pyfile-toolkit, item 5, 2026-09-29). Since then ok is false with the reason when neither min_raw nor min_nano is given;
