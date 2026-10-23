@@ -876,9 +876,28 @@ async function accountInfo(req, res, u) {
   countCheck('account_info', req);
   const account = u.searchParams.get('account') || '';
   if (!nanocurrency.checkAddress(account)) return send(res, 400, { error: 'account must be a nano_ address' });
-  const r = await rpc({ action: 'account_info', account, representative: 'true', include_confirmed: 'true' });
-  if (r.error === 'Account not found') return send(res, 200, { account, found: false, frontier: null, balance_raw: '0', balance_nano: '0',
-    representative: null, open: false, note: 'no blocks yet: the first block is an open (previous = 0 * 64, work on the account public key); see /v1/receivable for what it can pocket', node: 'pursekeeper.dev' });
+  // receivable: 'true' is what makes the node answer the `receivable` field at all. Without it the field is absent and the reply
+  // filled the gap with '0', so an account holding unpocketed sends was published as holding none (llmrt, 2026-10-23: a 1-raw send
+  // to an account with one block answered receivable_raw "0" against /v1/account_info while /v1/receivable listed the send).
+  let r;
+  try { r = await rpc({ action: 'account_info', account, representative: 'true', include_confirmed: 'true', receivable: 'true' }); }
+  catch (e) { return send(res, 502, { error: 'node: ' + e.message, receivable_raw: null, note: 'the node could not be asked; the balance and the receivable figure are unknown right now, not zero' }); }
+  if (r.error === 'Account not found') {
+    // An account with no blocks can still hold receivable sends: the node answers Account not found for it and keeps the sends in
+    // the receivable action, so this branch asks that action rather than leaving the field out (same 1-raw send, 2026-10-23).
+    let receivable_raw = null, receivable_count = null, receivable_truncated;
+    try {
+      const rr = await rpc({ action: 'receivable', account, count: String(RECEIVABLE_MAX), include_only_confirmed: 'true', threshold: '1' });
+      if (rr && !rr.error && rr.blocks && typeof rr.blocks === 'object') {
+        receivable_count = Object.keys(rr.blocks).length;
+        receivable_raw = Object.values(rr.blocks).reduce((a, v) => a + BigInt(v.amount), 0n).toString();
+        receivable_truncated = receivable_count >= RECEIVABLE_MAX;
+      }
+    } catch { /* node unavailable: the field stays null, which says it was not read, not that it is zero */ }
+    return send(res, 200, { account, found: false, frontier: null, balance_raw: '0', balance_nano: '0',
+      receivable_raw, ...(receivable_count !== null ? { receivable_count, receivable_truncated } : {}),
+      representative: null, open: false, note: 'no blocks yet: the first block is an open (previous = 0 * 64, work on the account public key); receivable_raw here is what the account can pocket, and /v1/receivable lists it with amounts and senders', node: 'pursekeeper.dev' });
+  }
   if (r.error) return send(res, 502, { error: 'node: ' + r.error });
   return send(res, 200, { account, found: true, open: true, ...shapeAccountInfo(r), checked_at: new Date().toISOString(), node: 'pursekeeper.dev' });
 }
@@ -892,7 +911,9 @@ function shapeAccountInfo(r) {
   const height = pick(r.confirmed_height, r.confirmation_height);
   return { frontier: r.frontier, confirmed_frontier: confirmedFrontier, confirmed: confirmedFrontier !== null && confirmedFrontier === r.frontier,
     balance_raw: String(r.balance), balance_nano: nano(r.balance), confirmed_balance_raw: r.confirmed_balance != null ? String(r.confirmed_balance) : undefined,
-    receivable_raw: String(r.receivable ?? r.pending ?? '0'), representative: r.representative, block_count: Number(r.block_count),
+    // null, never '0', when the node answered neither field: a figure that was never read is not a zero balance, and the request
+    // now asks for receivable so an opened account gets a real one (llmrt, 2026-10-23).
+    receivable_raw: (r.receivable ?? r.pending) != null ? String(r.receivable ?? r.pending) : null, representative: r.representative, block_count: Number(r.block_count),
     confirmation_height: height !== null && /^\d+$/.test(height) ? Number(height) : null };
 }
 async function processBlock(req, res) {
