@@ -265,13 +265,24 @@ const SUPPORTED = { kinds: [{ x402Version: x402.X402_VERSION, scheme: x402.SCHEM
 // --- HTTP ---------------------------------------------------------------------
 
 const hits = new Map();
-function overLimit(req, kind) {
+// The refusal is not a call: a 429 used to push its own timestamp into the window, so a client that kept retrying at the
+// rate it was refused held itself over the limit for as long as it kept trying, and the 429 carried no Retry-After to say
+// when the window would clear (llmrt, 2026-10-23). Measured on facilitator.pursekeeper.dev: 130 concurrent /verify calls
+// from one host answered 400 x120 then 429 x10, and none of the ten carried Retry-After, while pursekeeper.dev's own free
+// routes have answered 429 with Retry-After since 2026-10-23. Now the window is only extended by calls that are served, and
+// the refusal says when the oldest hit leaves it, the same shape as server.js overFreeLimit.
+function overLimit(req, kind, res) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   const now = Date.now(), key = kind + ':' + ip;
   const arr = (hits.get(key) || []).filter(t => now - t < 60_000);
+  if (arr.length >= LIMITS[kind]) {
+    hits.set(key, arr);
+    if (res) res.setHeader('Retry-After', String(Math.max(1, Math.ceil((arr[0] + 60_000 - now) / 1000))));
+    return true;
+  }
   arr.push(now); hits.set(key, arr);
   if (hits.size > 5000) hits.clear();
-  return arr.length > LIMITS[kind];
+  return false;
 }
 function countIp(req) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
@@ -351,7 +362,7 @@ async function handle(req, res, u, send, deps) {
   if (p === '/verify' || p === '/settle') {
     const kind = p.slice(1);
     if (req.method !== 'POST') return send(res, 405, { error: 'POST a JSON body {x402Version, paymentPayload, paymentRequirements}' }), true;
-    if (overLimit(req, kind)) return send(res, 429, { error: LIMITS[kind] + ' ' + kind + ' calls per minute per IP' }), true;
+    if (overLimit(req, kind, res)) return send(res, 429, { error: LIMITS[kind] + ' ' + kind + ' calls per minute per IP' }), true;
     let body;
     try { body = JSON.parse((await readBody(req)).toString('utf8') || '{}'); } catch (e) { if (e.tooLarge) res.setHeader('Connection', 'close'); return send(res, 400, { error: e.tooLarge ? e.message : 'body must be JSON: ' + e.message }), true; }
     if (!body.paymentPayload || !body.paymentRequirements) return send(res, 400, { error: 'paymentPayload and paymentRequirements are required' }), true;

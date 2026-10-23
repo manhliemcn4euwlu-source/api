@@ -250,6 +250,40 @@ test('a body under the limit is parsed as before', async () => {
   assert.equal(out.body.invalidReason, 'requirements_unsupported');
 });
 
+// llmrt, 2026-10-23: the facilitator's limiter pushed the timestamp of a refused call into the window, so a client that
+// retried at the rate it was refused stayed over the limit, and the 429 carried no Retry-After. Measured on
+// facilitator.pursekeeper.dev: 130 concurrent /verify calls from one host answered 400 x120 then 429 x10, none with
+// Retry-After, while pursekeeper.dev's own free routes answer 429 with Retry-After since 2026-10-23.
+test('a refused verify call does not extend the window, and the 429 says when to come back', async () => {
+  const { PassThrough } = require('node:stream');
+  const ip = '203.0.113.44';
+  let out, headers;
+  async function post() {
+    const req = new PassThrough(); req.headers = { host: f.HOST }; req.method = 'POST'; req.socket = { remoteAddress: ip };
+    headers = {};
+    const res = { setHeader: (k, v) => { headers[k.toLowerCase()] = v; } };
+    out = null;
+    const send = (_res, status, body) => { out = { status, body }; };
+    const p = f.handle(req, res, { pathname: '/verify' }, send, deps(node()));
+    req.write(Buffer.from('{}')); req.end();
+    await p;
+    return out;
+  }
+  // 120 served calls use the minute's allowance (LIMITS.verify).
+  for (let i = 0; i < 120; i++) assert.equal((await post()).status, 400, 'call ' + (i + 1) + ' is served');
+  const over = await post();
+  assert.equal(over.status, 429);
+  const ra = Number(headers['retry-after']);
+  assert.ok(Number.isInteger(ra) && ra >= 1 && ra <= 60, 'a 429 must say when the window clears, got ' + JSON.stringify(headers['retry-after']));
+  // The refused call must not push the window forward: the answer stays 429 with a Retry-After that does not grow past 60 s,
+  // and the window still clears when the 120 served calls age out.
+  const again = await post();
+  assert.equal(again.status, 429);
+  const ra2 = Number(headers['retry-after']);
+  assert.ok(ra2 >= 1 && ra2 <= 60, 'the second refusal still names the window, got ' + ra2);
+  assert.ok(ra2 <= ra, 'a refused call must not extend the window (was ' + ra + ' s, then ' + ra2 + ' s)');
+});
+
 test('rollup: totals, one row per payTo, per-payer counts, verify-only payTos included', () => {
   const A = 'nano_1zqdw3qf1z8k3jx8jintaiwpo3yz7zqh1me4ph5j439ts8hsppx8dzy4xcsz', B = 'nano_1xug1q5t7nxoj3ywwzokiea9jz8fq8qfgzp8pbyfr3co3e5xgj755uofu8ue';
   const P1 = 'nano_1i3y944esngqw6wb6ia68dotj4yuqctch9kx8ct65twt8ewi4rdcfgax7ggf', P2 = 'nano_3uojbn47b5xqcbs4yibbasamn8aeyqxgyi1z8peogwtdn6z3kagjanjpz4ss';
