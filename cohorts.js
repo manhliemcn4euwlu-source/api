@@ -234,6 +234,10 @@ function totalsOf(rows) {
     repeat: { one_off: 0, repeat_within_30d: 0 },
     paid_raw: 0n, received_raw: 0n };
   for (const r of rows) {
+    // One denominator: every breakdown counts the rows the headline counts. Counting the
+    // dust rows listed for completeness made the wallet-state buckets sum to 121 while
+    // `counterparties` said 119 (2026-10-23), so a reader could not tell which was the count.
+    if (!countsAsCounterparty(r)) continue;
     t.wallet_state[r.wallet_state] = (t.wallet_state[r.wallet_state] || 0) + 1;
     if (r.funding.grant_funded) t.funding.grant_funded++;
     if (r.funding.independently_earned) t.funding.independently_earned++;
@@ -264,6 +268,7 @@ async function computeCohorts({ ledger = readLedger(), rpc = cachedRpc } = {}) {
   }
   const ours = history.filter(b => !refundedBlock(b, refunds));
   const own = await ownAddresses(ledger, rpc);
+  const via = await site.passthroughSources(ledger, rpc, own);
   const cps = addChainOnly(collect(ledger, own), ours, own);
   const rows = [];
   for (const cp of cps.values()) {
@@ -275,9 +280,42 @@ async function computeCohorts({ ledger = readLedger(), rpc = cachedRpc } = {}) {
         reasons: cp.reasons.map(r => site.redact(r).slice(0, REASON_CHARS)), initiative_ids: cp.initiative_ids, chain_error: e.message });
     }
   }
+  rows.splice(0, rows.length, ...mergePassThrough(rows, via));
   for (const r of rows) r.counts_as_counterparty = countsAsCounterparty(r);
   rows.sort((a, b) => (a.interactions.first_at || '').localeCompare(b.interactions.first_at || ''));
   return { generated_at: new Date().toISOString(), address: ADDRESS, window_days: WINDOW_DAYS, scan_limit: SCAN, rows, totals: totalsOf(rows) };
+}
+
+// Fold each one-time pass-through wallet into the account that funded it, the rule the home
+// page already applies (site.counterpartyNumbers): eleven purchases by three buyers are three
+// counterparties, not eleven. Without this the home page reported 28 strangers from addresses
+// pursekeeper never paid while this page reported 56 independently-earned addresses for the same
+// ledger, and a wallet opened by a buyer pursekeeper had paid was shown as a stranger (2026-10-23).
+function mergePassThrough(rows, via) {
+  if (!via.size) return rows;
+  const byAddress = new Map(rows.map(r => [r.address, r]));
+  const dropped = new Set();
+  const added = [];
+  for (const [wallet, funder] of via) {
+    const w = byAddress.get(wallet);
+    if (!w || dropped.has(wallet) || wallet === funder) continue;
+    let f = byAddress.get(funder);
+    if (!f) { f = { ...w, address: funder, via_wallets: [] }; byAddress.set(funder, f); added.push(f); }
+    else {
+      f.paid_raw = (BigInt(f.paid_raw) + BigInt(w.paid_raw)).toString();
+      f.received_raw = (BigInt(f.received_raw) + BigInt(w.received_raw)).toString();
+      f.paid_count += w.paid_count;
+      f.received_count += w.received_count;
+      f.interactions = { ...f.interactions, count: f.interactions.count + w.interactions.count };
+      f.reasons = [...new Set([...f.reasons, ...w.reasons])];
+      f.initiative_ids = [...new Set([...f.initiative_ids, ...w.initiative_ids])];
+      (f.via_wallets = f.via_wallets || []).push(wallet);
+    }
+    dropped.add(wallet);
+  }
+  const out = rows.filter(r => !dropped.has(r.address)).concat(added);
+  for (const r of out) r.counts_as_counterparty = countsAsCounterparty(r);
+  return out;
 }
 
 // --- rendering ---------------------------------------------------------------
