@@ -831,8 +831,26 @@ async function verifyBlock(req, res, u) {
   // minimum (uknwplayer, 2026-09-29): since 2026-09-30 ok is false with the reason unless `to` is given or any_to=1 asks
   // only whether H is a confirmed send to anyone. Same shape as the amount rule: never a 400, `found` unchanged.
   const anyTo = u.searchParams.get('any_to') === '1' && !to;
-  const b = await rpc({ action: 'block_info', json_block: 'true', hash });
-  if (b.error) return send(res, 404, { hash, found: false, ok: false, error: 'block not found on this node (not broadcast yet, or wrong hash); retry in a second' });
+  // A thrown transport failure (node down, timeout, DNS) says the same thing as a JSON error below: cannot tell. It used to
+  // escape to the outer 500 handler, which at least carried no found field, but the answer said nothing about the payment;
+  // it is named here in the same words so both shapes of the same outage read alike.
+  let b;
+  try { b = await rpc({ action: 'block_info', json_block: 'true', hash }); }
+  catch (e) { return send(res, 502, { hash, error: 'the node could not be reached for this hash (' + String((e && e.message) || e).slice(0, 160) + '); whether the block is on the chain is unknown, so nothing here says it is absent', note: 'retry; do not rebuild a payment on this answer' }); }
+  // Only the node's own "Block not found" means the block is absent. Any other error (the node down, a proxy page, a
+  // timeout, a refusal) says nothing about whether the block exists, and this route used to answer every one of them as
+  // found:false, the same answer a block that is genuinely not there gets. The skill's no-node.js reads found:false as
+  // "positively not on the chain" and rebuilds a send it then broadcasts, so an outage on this box told a payer whose
+  // send had landed to pay a second time (llmrt, 2026-10-23: the client was fixed for exactly this in c7cf798 on the same
+  // day, the route it calls was not). Now the absence answer is reserved for the node's own not-found, and every other
+  // failure is 502 with no found field at all, so a caller that branches on found cannot read it as absent.
+  if (b.error) {
+    // The node's own words for an absent block are exactly "Block not found"; a loose /not found/ also matched
+    // "Account not found in ledger", which is a syncing node failing to answer, not an absence.
+    if (/\bblock not found\b/i.test(String(b.error)))
+      return send(res, 404, { hash, found: false, ok: false, error: 'block not found on this node (not broadcast yet, or wrong hash); retry in a second' });
+    return send(res, 502, { hash, error: 'the node could not answer for this hash (' + String(b.error).slice(0, 160) + '); whether the block is on the chain is unknown, so nothing here says it is absent', note: 'retry; do not rebuild a payment on this answer' });
+  }
   const amount = BigInt(b.amount || '0');
   const confirmed = b.confirmed === 'true';
   const dest = b.subtype === 'send' ? b.contents.link_as_account : null;
