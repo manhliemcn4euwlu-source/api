@@ -199,3 +199,44 @@ test('a handed-back /v1/fetch on a multi-call bearer hash does not overwrite an 
   assert.equal(r4.headers['x-nano-replay'], 'true');
   assert.equal(r4.body.echo, 'first');
 }));
+
+// llmrt, 2026-10-23: a handed-back call is counted as a paid call nowhere, but only calls_paid was rolled back. An x402
+// payment that bought nothing (the target cut the body) still left calls_x402 raised, so /v1/stats answered
+// calls_x402 > calls_paid: a counter of x402 calls served that outran the count of calls paid for. The hand-back now rolls
+// back the rail it was charged on, so the two agree again.
+const statsRail = async () => {
+  Object.assign(X402_CONFIRM, { intervalMs: 1, boundMs: 200 });
+  const sk = N.deriveSecretKey(await N.generateSeed(), 0);
+  const payer = N.deriveAddress(N.derivePublicKey(sk), { useNanoPrefix: true });
+  const { block } = N.createBlock(sk, { work: WORK, previous: FRONTIER, representative: payer, balance: (BALANCE - AMOUNT).toString(), link: PAY_TO });
+  block.account = block.account.replace(/^xrb_/, 'nano_');
+  const hash = x402.blockHash(block);
+  const chain = new Map();
+  globalThis.fetch = async (url, opts) => {
+    const b = JSON.parse(opts.body); let a;
+    if (b.action === 'account_info') a = { frontier: FRONTIER, confirmed_frontier: FRONTIER, balance: BALANCE.toString(), representative: payer, block_count: '1' };
+    else if (b.action === 'process') { chain.set(hash, b.block); a = { hash }; }
+    else if (b.action === 'block_info') a = chain.has(b.hash) ? { block_account: payer, subtype: 'send', amount: AMOUNT.toString(), confirmed: 'true', contents: chain.get(b.hash) } : { error: 'Block not found' };
+    else a = { error: 'unexpected rpc ' + b.action };
+    return { ok: true, json: async () => a };
+  };
+  return { hash, header: encodePaymentSignatureHeader({ x402Version: 2, accepted: REQ, payload: { block } }) };
+};
+
+test('a handed-back x402 call is not counted as an x402 call either: /v1/stats keeps calls_x402 within calls_paid', viaLocal(async () => {
+  await loadPurposes();
+  const { header } = await statsRail();   // its own RPC mock: an earlier test replaced globalThis.fetch
+  const before = response();
+  await server.listeners('request')[0]({ url: '/v1/stats', method: 'GET', headers: { host: 'pursekeeper.dev' }, socket: { remoteAddress: '127.0.0.1' } }, before);
+  const paid0 = before.body.calls_paid, x4020 = before.body.calls_x402;
+  const r = response();
+  await server.listeners('request')[0]({ url: '/v1/fetch?url=http://target.test/cut', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'payment-signature': header }, socket: { remoteAddress: '127.0.0.1' } }, r);
+  assert.equal(r.status, 502, JSON.stringify(r.body));
+  assert.match(r.body.note, /handed back/);
+  const after = response();
+  await server.listeners('request')[0]({ url: '/v1/stats', method: 'GET', headers: { host: 'pursekeeper.dev' }, socket: { remoteAddress: '127.0.0.1' } }, after);
+  assert.equal(after.body.calls_paid, paid0, 'nothing was paid for: the paid count is back where it started');
+  assert.equal(after.body.calls_x402, x4020, 'nothing was served over x402: that count is back too');
+  assert.ok(after.body.calls_x402 <= after.body.calls_paid, 'no more x402 calls than paid calls');
+}));
