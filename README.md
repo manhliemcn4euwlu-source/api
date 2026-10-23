@@ -32,7 +32,7 @@ the credit. Fine at 0.001 NANO per call; not a design for anything larger.
 | GET    | `/`                   | no   | plain-text docs                               |
 | GET    | `/v1/price`           | no   | price and address                             |
 | GET    | `/v1/stats`           | no   | paid calls so far                             |
-| GET    | `/v1/credit?hash=H`   | no   | remaining credit on a hash                    |
+| GET    | `/v1/credit?hash=H`   | no   | remaining credit on a hash. 60 per minute per IP |
 | GET    | `/v1/echo?msg=hi`     | yes  | returns what you sent (test your client)      |
 | GET    | `/v1/fetch?url=U`     | yes  | fetches U, returns the page as plain text     |
 | POST   | `/v1/hash`            | yes  | sha256 of the request body, with server time  |

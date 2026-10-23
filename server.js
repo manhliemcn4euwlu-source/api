@@ -694,7 +694,10 @@ async function workGenerate(req, res) {
 // real allowance 60 in total across verify + receivable + account_info + process +
 // requests, so a caller that polled /v1/verify could not read /v1/receivable in the
 // same minute, and scripts/no-node.js receive died at the 30th pending send.
-const checkHits = { verify: new Map(), receivable: new Map(), account_info: new Map(), process: new Map(), requests: new Map() };
+// /v1/credit is the sixth free route and carries the same allowance: it is the only one whose every miss reaches the
+// node (creditForUnlocked answers a hash it has not stored with a block_info RPC), and until 2026-10-23 it had no counter
+// at all, so a caller could ask it about fresh hashes without limit and every call was a node lookup (llmrt, 2026-10-23).
+const checkHits = { verify: new Map(), receivable: new Map(), account_info: new Map(), process: new Map(), requests: new Map(), credit: new Map() };
 // Persisted counters for the free checks, so third-party use of /v1/verify and
 // /v1/receivable survives restarts and can be cited at review. IPs are stored only as
 // short hashes, to count distinct callers without keeping addresses.
@@ -1307,6 +1310,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { hash: h, found: entries.length > 0, entries, note: 'every /v1/work and /v1/process call since 2026-09-16 is logged here by hash; absence means pursekeeper.dev was not used for that block' });
     }
     if (u.pathname === '/v1/credit') {
+      if (overFreeLimit(req, checkHits.credit, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
       const c = await creditFor(u.searchParams.get('hash') || '');
       if (c.error) return send(res, 400, { error: c.error });
       const body = { remaining_raw: c.remaining.toString(), remaining_nano: nano(c.remaining) };
