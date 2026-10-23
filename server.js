@@ -191,13 +191,41 @@ const store = readJsonStore(DATA);
 let credits = store.value;
 if (store.damaged) console.error('credits: ' + DATA + ' is damaged (' + store.error + ')' + (store.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
 const save = () => writeJsonAtomic(DATA, credits);
-const stats = { calls_paid: 0, calls_x402: 0, calls_402: 0, started: new Date().toISOString() };
+// The paid-call counters, durable since 2026-10-23. They lived only in the process: every restart reset them to zero while
+// `started` moved to the restart time, so /v1/stats answered "0 paid calls since 17:05 today" beside x402_settled 39 and
+// credited_hashes 45 from the same durable files (llmrt, 2026-10-23, measured on the live service). A reader checking whether
+// anything was ever sold here read zero, and the free-route counters next to them were already durable (checks.json), so the two
+// halves of one answer disagreed about whether the service had been used at all. `started` is the first boot that recorded a
+// number; `process_started_at` is this boot, so a reader can tell the two apart.
+// Under `node --test` (NODE_TEST_CONTEXT set) the counters stay in memory unless a test names its own file: most of the suite
+// boots this module with a mocked node and would otherwise rewrite the live counter file on every run. A test that is about
+// durability passes STATS_FILE, and so does production.
+const STATS_FILE = process.env.STATS_FILE || (process.env.NODE_TEST_CONTEXT ? null : path.join(__dirname, 'data', 'stats.json'));
+let stats = { calls_paid: 0, calls_x402: 0, calls_402: 0, started: null };
+if (STATS_FILE) { const r = readJsonStore(STATS_FILE); if (r.damaged) console.error('stats: ' + STATS_FILE + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on')); if (r.value && typeof r.value === 'object') stats = { ...stats, ...r.value }; }
+stats.process_started_at = new Date().toISOString();
+if (!stats.started) stats.started = stats.process_started_at;
+function saveStats() {
+  if (!STATS_FILE) return;
+  try { writeJsonAtomic(STATS_FILE, { calls_paid: stats.calls_paid, calls_x402: stats.calls_x402, calls_402: stats.calls_402, started: stats.started }); }
+  catch {}
+}
+// A 402 challenge is cheap and frequent (thousands a day), so the write is coalesced: at most one write per two seconds while
+// counters move, plus one flush at exit. A counter is not money, so losing the last second of a killed process is acceptable;
+// losing the whole history to a restart was not.
+let statsFlushTimer = null;
+function saveStatsSoon() {
+  if (statsFlushTimer) return;
+  statsFlushTimer = setTimeout(() => { statsFlushTimer = null; saveStats(); }, 2000);
+  if (statsFlushTimer.unref) statsFlushTimer.unref();
+}
+process.on('exit', () => { if (statsFlushTimer) { clearTimeout(statsFlushTimer); statsFlushTimer = null; saveStats(); } });
 // A handed-back call is one that was charged and then not served (a target that never answered, a work_generate failure, a
 // redirect that could not be followed). Its price goes back on the hash as credit, so it must stop counting as a paid call:
 // until 2026-10-23 only calls_paid was rolled back, and an x402 payment that bought nothing left calls_x402 raised, so
 // /v1/stats could answer calls_x402 > calls_paid (llmrt, 2026-10-23, from the source). `rail` is how the call was charged:
 // 'x402' when the payment arrived as a PAYMENT-SIGNATURE, 'bearer' when it was an X-Nano-Payment hash.
-function unpay(rail) { stats.calls_paid--; if (rail === 'x402' && stats.calls_x402 > 0) stats.calls_x402--; }
+function unpay(rail) { stats.calls_paid--; if (rail === 'x402' && stats.calls_x402 > 0) stats.calls_x402--; saveStatsSoon(); }
 // The settled x402 blocks: the record that a block paid for a call, and the source of the known-payer list. Rewritten in
 // place, a crash mid-write emptied it and the catch answered [], so every settled payment left the public record and every
 // payer left the known-payer set (llmrt, item 5, 2026-10-20).
@@ -465,6 +493,7 @@ function x402Required(req, hint) {
 
 function paymentRequired(res, hint, req, extra) {
   stats.calls_402++;
+  saveStatsSoon();
   // Count the refused side as well as the paid side: distinct callers of the payment door,
   // as IP hashes only (adopted 2026-09-20 after a Guild Hall cross-reading; see checkStats).
   if (req) {
@@ -629,6 +658,7 @@ async function chargeX402Locked(req, res, payload, key) {
     rememberPayer(v.payer);
     try { saveX402Log(); } catch {}
     stats.calls_paid++; stats.calls_x402++;
+    saveStatsSoon();
     res.setHeader(x402.RESPONSE_HEADER, x402.settleHeader(s));
     res.setHeader('x-nano-payment-hash', s.transaction);
     res.chargeRail = 'x402';   // read by unpay() when the call is handed back
@@ -937,6 +967,7 @@ async function charge(req, res) {
     credits[hash.toUpperCase()] = left.toString();
     save();
     stats.calls_paid++;
+    saveStatsSoon();
     res.setHeader('x-nano-credit-remaining-raw', left.toString());
     res.chargeRail = 'bearer';
     res.paidHash = String(hash).toUpperCase(); res.replayKey = replayKey(req); res.replayBind = { bearer: true };
@@ -1321,8 +1352,16 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, fs.readFileSync(f, 'utf8'), 'text/plain');
     }
     if (u.pathname === '/v1/price') return send(res, 200, { pay_to: ADDRESS, price_raw: PRICE_RAW.toString(), price_nano: nano(PRICE_RAW) });
-    if (u.pathname === '/v1/stats') return send(res, 200, { ...stats, checks: checkStats(), credited_hashes: Object.keys(credits).length, x402_settled: x402Log.length,
-      x402_work_by_seller: x402Log.filter(e => e.work_by === 'seller').length, work: { ...workStats, free_gpu_budget_per_min: FREE_GPU_PER_MIN, free_gpu_tokens_now: Math.floor(freeGpu.tokens), known_payers: knownPayers.size }, work_sources: workSources() });
+    if (u.pathname === '/v1/stats') {
+      // The paid counters and the two figures beside them come from different files: x402_settled is the durable settled list and
+      // credited_hashes the durable credit store, while calls_paid used to reset on every restart (see STATS_FILE). The answer now
+      // carries both clocks and says when they disagree, so a reader never has to guess whether "0 paid calls" means none ever or
+      // none since the last boot.
+      const inconsistent = stats.calls_paid < x402Log.length || stats.calls_paid < 0;
+      return send(res, 200, { ...stats, checks: checkStats(), credited_hashes: Object.keys(credits).length, x402_settled: x402Log.length,
+        ...(inconsistent ? { counters_note: 'calls_paid is below x402_settled, so this counter lost history before it was written to disk on 2026-10-23; x402_settled and credited_hashes are the durable figures, calls_paid counts from started' } : {}),
+        x402_work_by_seller: x402Log.filter(e => e.work_by === 'seller').length, work: { ...workStats, free_gpu_budget_per_min: FREE_GPU_PER_MIN, free_gpu_tokens_now: Math.floor(freeGpu.tokens), known_payers: knownPayers.size }, work_sources: workSources() });
+    }
     if (u.pathname === '/.well-known/x402') {
       // Discovery manifest read by seller directories (agent402.tools, agent-tools.cloud, nohumans.directory). Same shape as the
       // x402 v2 PaymentRequired object per resource, plus the fields pyfile's and Vend's manifests carry, so any of their readers works.
