@@ -1036,8 +1036,42 @@ async function checkFetchUrl(urlStr) {
 // maxBytes caps what is read off the socket, maxChars what is returned: a page past the second bound used to come back cut
 // at 200,000 characters with no field saying so, so a buyer paid for a page and got a prefix that read as the whole document
 // (the same silent-truncation class as /v1/receivable's 100-hash bound, llmrt, 2026-10-23).
+//
+// The byte bound is enforced while reading, not after: the first version of it called r.text() and sliced the finished
+// string, so a paid call to a target with an endless or very large body read the whole thing into memory first (200 MB in
+// one 0.37 s call, measured here 2026-10-23) and then reported the body as "cut at maxBytes" although nothing had been
+// cut. maxBytes is the read bound now: reading stops at it, the stream is cancelled, and the answer says the total is
+// unknown because the rest was never read.
 const FETCH_BOUNDS = { headersMs: Number(process.env.FETCH_TIMEOUT_MS || 15_000), bodyMs: Number(process.env.FETCH_BODY_TIMEOUT_MS || 15_000),
   maxBytes: Number(process.env.FETCH_MAX_BYTES || 2_000_000), maxChars: Number(process.env.FETCH_MAX_CHARS || 200_000) };
+
+// Read at most maxBytes off the body stream, decoding UTF-8 as it goes, and stop: { text, bytes, more }. `more` is true
+// when the target had bytes past the bound that were never read, so a caller can say the total is unknown rather than
+// present the number read as the document's length. An incomplete multi-byte character at the cut is dropped instead of
+// being reported as a replacement character, since it is the cut's artifact and not the page's content.
+async function readCapped(r, maxBytes) {
+  const stream = r.body;
+  if (!stream || typeof stream.getReader !== 'function') return { text: await r.text(), bytes: null, more: false };
+  const dec = new TextDecoder('utf-8');
+  const parts = [];
+  let bytes = 0, more = false;
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value || !value.length) continue;
+    if (bytes + value.length > maxBytes) {
+      parts.push(dec.decode(value.subarray(0, maxBytes - bytes), { stream: true }));
+      bytes = maxBytes; more = true;
+      try { await reader.cancel(); } catch { /* the cut is the point: the rest is never read */ }
+      break;
+    }
+    bytes += value.length;
+    parts.push(dec.decode(value, { stream: true }));
+  }
+  if (!more) parts.push(dec.decode());   // flush; at a cut the pending bytes are half a character the cut created
+  return { text: parts.join(''), bytes, more };
+}
 async function fetchText(urlStr, checked, bounds = FETCH_BOUNDS) {
   // The connection goes only to the addresses the check saw: the global fetch resolved the name again on its own, so
   // a rebinding name could pass checkFetchUrl and then connect somewhere private (Ops Control HQ, 2026-09-28). Every
@@ -1082,16 +1116,16 @@ async function fetchText(urlStr, checked, bounds = FETCH_BOUNDS) {
     let body;
     // Headers arrived but the body did not: the socket was cut (e.g. content-length 100 and ten bytes), or the bound above
     // fired. Nothing usable was fetched, so the handler hands the call back with the hash, as for a target that never answered.
-    try { body = await r.text(); }
+    try { body = await readCapped(r, bounds.maxBytes); }
     catch (e) {
       const m = 'target stopped answering mid-body (' + (e && e.message || String(e)) + (e && e.cause && e.cause.message ? ': ' + e.cause.message : '') + ')';
       const err = e instanceof Error ? e : new Error(m);
       err.message = m; err.noAnswer = true; throw err;
     }
-    // The read is capped at maxBytes: remember that the target had more, so the answer can say it was cut rather than
-    // presenting a prefix as the page.
-    const readCut = body.length > bounds.maxBytes;
-    if (readCut) body = body.slice(0, bounds.maxBytes);
+    // The read stopped at maxBytes: the target had more and it was never read, so the answer says the total is unknown
+    // rather than presenting the number read as the document's length.
+    const readCut = body.more;
+    body = body.text;
     if (/html/i.test(ct)) {
       body = body.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<!--[\s\S]*?-->/gi, ' ')
         .replace(/<\/(p|div|h[1-6]|li|tr|br|section|article)>/gi, '\n')
@@ -1107,9 +1141,11 @@ async function fetchText(urlStr, checked, bounds = FETCH_BOUNDS) {
       text_chars: text.length, truncated: cut,
       // A buyer that got a prefix must not read it as the whole page. The bound is this seller's, so the answer names it and
       // how much was left out (llmrt, 2026-10-23).
-      ...(cut ? { chars_before_cut: chars,
+      ...(cut ? { chars_before_cut: chars, ...(readCut ? { bytes_read: bounds.maxBytes, body_total_unknown: true } : {}),
         next: 'this page is longer than the ' + bounds.maxChars + ' characters this seller returns in one call: text holds the first ' +
-          text.length + (readCut ? ' of the ' + chars + ' characters read (the body was itself cut at ' + bounds.maxBytes + ' bytes)' : ' of ' + chars) +
+          text.length + (readCut
+            ? ' of the ' + chars + ' characters read before the body was cut at ' + bounds.maxBytes + ' bytes; the target had more, so the body\'s full length is unknown'
+            : ' of ' + chars) +
           '; the remainder was dropped, not summarised, so fetch the target directly if you need all of it' } : {}) };
   } finally { clearTimeout(t); dispatcher.close().catch(() => {}); }
 }
