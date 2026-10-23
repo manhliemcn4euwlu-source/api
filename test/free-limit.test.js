@@ -92,6 +92,27 @@ function freshHash(n) {
   const hex = n.toString(16).toUpperCase().padStart(2, '0');
   return hex.repeat(32);
 }
+// llmrt, 2026-10-23: /v1/requests and /v1/credit carry the same 60/min allowance as the other four free routes and were
+// the two that never called countCheck, so /v1/stats reported use of four routes out of six. Its README row calls that object
+// the public record of third-party use, and it is what the reviews cite: 15 calls each answered 200 and 400 against the live
+// service while every counter stayed at zero.
+test('/v1/stats counts every free route, not four of six', async () => {
+  const ip = '198.51.100.17';
+  const read = async () => (await get('/v1/stats', ip)).body.checks;
+  const before = await read();
+  assert.equal(typeof before.requests, 'number', 'the requests counter must exist in the answer');
+  assert.equal(typeof before.credit, 'number', 'the credit counter must exist in the answer');
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await get('/v1/requests?hash=' + H, ip)).status, 200);
+    assert.equal((await get('/v1/credit?hash=' + freshHash(200 + i), ip)).status, 400);
+  }
+  const after = await read();
+  assert.equal(after.requests - before.requests, 3, 'three requests reads must raise its counter by three');
+  assert.equal(after.credit - before.credit, 3, 'three credit reads must raise its counter by three');
+  // The four that were already counted keep their own numbers and are not fed by the new two.
+  assert.equal(after.verify, before.verify); assert.equal(after.receivable, before.receivable);
+  assert.equal(after.account_info, before.account_info); assert.equal(after.process, before.process);
+});
 // llmrt, 2026-10-23: /v1/receivable asked the node for a fixed 100 hashes and said nothing about the bound, so an account
 // with more than 100 unpocketed sends read 100 of them as if that were the whole list. The answer now names the truncation and
 // says how to read the rest.

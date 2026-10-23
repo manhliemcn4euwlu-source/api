@@ -740,7 +740,12 @@ function countCheck(kind, req) {
   try { writeJsonAtomic(CHECKS_FILE, checks); } catch {}
 }
 function checkStats() {
-  return { verify: checks.verify, receivable: checks.receivable, account_info: checks.account_info || 0, process: checks.process || 0, distinct_ips: Object.keys(checks.ips).length, since: checks.since,
+  // Every free route with a counter appears here. /v1/requests and /v1/credit carry the same 60/min allowance as the other
+  // four and were never counted, so /v1/stats reported use of four routes out of six while its README row is the only public
+  // record of third-party use and the reviews cite it (llmrt, 2026-10-23: 15 calls each answered 200 and 400 against the
+  // live service and every counter in this object stayed at zero).
+  return { verify: checks.verify, receivable: checks.receivable, account_info: checks.account_info || 0, process: checks.process || 0,
+    requests: checks.requests || 0, credit: checks.credit || 0, distinct_ips: Object.keys(checks.ips).length, since: checks.since,
     challenges_402: checks.challenges_402 || 0, challenges_402_distinct_callers: Object.keys(checks.ips402 || {}).length, since_402: checks.since_402 || null };
 }
 function overFreeLimit(req, map, limit, res) {
@@ -1313,6 +1318,7 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/v1/process' && req.method === 'POST') return processBlock(req, res);
     if (u.pathname === '/v1/requests' && req.method === 'GET') {
       if (overFreeLimit(req, checkHits.requests, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+      countCheck('requests', req);
       const h = String(u.searchParams.get('hash') || '').toUpperCase();
       if (!/^[0-9A-F]{64}$/.test(h)) return send(res, 400, { error: 'hash must be 64 hex characters (a block hash, or the frontier work was asked for)' });
       const entries = reqLogFor(h);
@@ -1320,6 +1326,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (u.pathname === '/v1/credit') {
       if (overFreeLimit(req, checkHits.credit, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+      countCheck('credit', req);
       const c = await creditFor(u.searchParams.get('hash') || '');
       if (c.error) return send(res, 400, { error: c.error });
       const body = { remaining_raw: c.remaining.toString(), remaining_nano: nano(c.remaining) };
