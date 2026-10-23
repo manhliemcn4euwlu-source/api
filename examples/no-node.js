@@ -16,14 +16,14 @@ const N = require('nanocurrency');
 const API = (process.env.API || 'https://pursekeeper.dev').replace(/\/$/, '');
 const REP = process.env.NANO_REP || 'nano_3arg3asgtigae3xckabaaewkx3bzsh7nwz7jkmjos79ihyaxwphhm6qgjps4';
 const RAW = 10n ** 30n;
-// GET through the API. A 429 (60 per minute per IP on every free route; the server's Retry-After says how long) is
-// waited out and retried, so a receive of many pending sends runs to the end instead of dying when a minute's
-// allowance is spent (llmrt, api#103, 2026-10-22: a receive died at the 30th send while the routes shared one bucket).
-// Any other answer that carries JSON is handed back for the caller to read (.error, found:false, found:true); an answer
-// with no JSON body (a proxy's error page, a 5xx with HTML) is a transport failure and is named as one, status included.
-async function get(p) {
+// GET and POST through the API. A 429 (60 per minute per IP on every free route, including POST /v1/process, and 6 per
+// minute free on POST /v1/work; the server's Retry-After says how long) is waited out and retried, so a receive of many
+// pending sends runs to the end instead of dying when a minute's allowance is spent on GET or POST (llmrt, api#103,
+// 2026-10-22). Any other answer that carries JSON is handed back for the caller to read (.error, found:false, found:true);
+// an answer with no JSON body (a proxy's error page, a 5xx with HTML) is a transport failure and is named as one, status included.
+async function reqJson(p, init) {
   for (let i = 0; ; i++) {
-    const r = await fetch(API + p);
+    const r = await fetch(API + p, init);
     if (r.status === 429 && i < 30) {
       const wait = Math.min(60, Math.max(1, Number(r.headers.get('retry-after')) || 20));
       console.error('rate limited on ' + p.split('?')[0] + ' (' + (i + 1) + '); waiting ' + wait + ' s');
@@ -34,7 +34,8 @@ async function get(p) {
     catch { throw new Error('HTTP ' + r.status + ' from ' + p.split('?')[0] + ' with no JSON body'); }
   }
 }
-const post = (p, body) => fetch(API + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+const get = p => reqJson(p);
+const post = (p, body) => reqJson(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const toRaw = s => { const m = /^(\d+)(?:\.(\d{1,30}))?$/.exec(s); if (!m) throw new Error('amount must be a decimal XNO amount'); return BigInt(m[1]) * RAW + BigInt((m[2] || '').padEnd(30, '0')); };
 const fmt = r => { r = BigInt(r); const w = r / RAW, f = (r % RAW).toString().padStart(30, '0').replace(/0+$/, ''); return w + (f ? '.' + f : ''); };
 
@@ -64,6 +65,7 @@ async function broadcast(block, subtype) {
   const info = await get('/v1/account_info?account=' + account);
   if (info.error) throw new Error('account_info: ' + info.error);
   const pend = await get('/v1/receivable?account=' + account);
+  if (pend.error || !Array.isArray(pend.blocks)) throw new Error('receivable: ' + (pend.error || 'no blocks field'));
   if (cmd === 'status') return console.log(JSON.stringify({ account, open: info.found, balance_nano: info.balance_nano, frontier: info.frontier, representative: info.representative, unpocketed: pend.blocks }, null, 1));
 
   let previous = info.found ? info.frontier : '0'.repeat(64);

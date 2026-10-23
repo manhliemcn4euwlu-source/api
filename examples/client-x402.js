@@ -65,6 +65,17 @@ function resourceInfoFault(r) {
   if (r.iconUrl != null && (typeof r.iconUrl !== 'string' || r.iconUrl.length > 2048)) return 'resource.iconUrl longer than 2048';
   return '';
 }
+const MAX_NANO_RAW = 133248297920938463463374607431768211455n;   // 2^128 - 1 (Nano supply ceiling in raw)
+function acceptedFault(a) {
+  if (String(a.asset || '').toUpperCase() !== 'XNO') return `accepted.asset is ${JSON.stringify(a.asset)}, expected "XNO"`;
+  if (typeof a.payTo !== 'string' || !N.checkAddress(a.payTo.replace(/^xrb_/, 'nano_')))
+    return `accepted.payTo ${JSON.stringify(a.payTo)} is not a valid Nano address`;
+  if (typeof a.amount !== 'string' || !/^[1-9]\d*$/.test(a.amount))
+    return `accepted.amount ${JSON.stringify(a.amount)} must be a positive integer string in raw`;
+  if (BigInt(a.amount) > MAX_NANO_RAW)
+    return `accepted.amount ${a.amount} raw exceeds the Nano supply ceiling (${MAX_NANO_RAW} raw)`;
+  return '';
+}
 
 const url = process.argv[2] || 'https://pursekeeper.dev/v1/echo?msg=hello';
 const RPC = process.env.NANO_RPC;
@@ -282,7 +293,7 @@ function savePayload(file, body) {
   const hdr = first.headers.get('payment-required');
   const pr = hdr ? unb64(hdr) : (await first.json()).x402;
   if (!pr || pr.x402Version !== 2) throw new Error('no x402 v2 PaymentRequired in the 402');
-  const accepted = pr.accepts.find(a => a.scheme === 'exact' && a.network === 'nano:mainnet');
+  const accepted = Array.isArray(pr.accepts) && pr.accepts.find(a => a && a.scheme === 'exact' && a.network === 'nano:mainnet');
   if (!accepted) throw new Error('seller does not accept exact on nano:mainnet: ' + JSON.stringify(pr.accepts));
   // The 402's resource is echoed verbatim into the payment header, and a facilitator that parses with @x402/core refuses
   // the whole payment when it breaks the x402 v2 ResourceInfo caps (serviceName and each tag: 1-32 printable ASCII
@@ -291,6 +302,11 @@ function savePayload(file, body) {
   const resourceFault = resourceInfoFault(pr.resource);
   if (resourceFault) {
     console.error(`refusing: the seller's 402 resource fails the x402 v2 ResourceInfo schema (${resourceFault}); a facilitator would refuse the payment as invalid_block, so nothing is signed. Tell the seller.`);
+    process.exit(4);
+  }
+  const quoteFault = acceptedFault(accepted);
+  if (quoteFault) {
+    console.error(`refusing: the seller's 402 quote fails the Nano exact schema (${quoteFault}); a facilitator would refuse the payment as invalid_block, so nothing is signed. Tell the seller.`);
     process.exit(4);
   }
   console.error(`seller wants ${accepted.amount} raw (${Number(accepted.amount) / 1e30} NANO) to ${accepted.payTo}`);
