@@ -157,11 +157,16 @@ async function load() {
     const wakes = q('select id, started_at, ended_at, trigger, model, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, summary from wakes order by id desc');
     const reports = q('select week_start, body, created_at from reports order by week_start desc');
 
-    let hot = 0n, receivable = 0n;
+    // The hot balance is a published number, and a node that cannot be asked is not a wallet holding nothing. Until 2026-10-23
+    // this catch left both at 0n, so an outage made the home page and /log.json say the hot wallet holds Ӿ0 and the log
+    // published it as a figure, with nothing saying it had not been read. Now the failure is carried: `hot` and `receivable`
+    // stay null, the numbers object says so, and the pages name the outage instead of printing a zero (llmrt, 2026-10-23).
+    let hot = null, receivable = null, hotError = null;
     try {
       const r = await fetch(RPC, { method: 'POST', body: JSON.stringify({ action: 'account_balance', account: ADDRESS, include_only_confirmed: 'true' }) }).then(r => r.json());
-      hot = BigInt(r.balance || 0); receivable = BigInt(r.receivable || r.pending || 0);
-    } catch {}
+      if (r && r.error) throw new Error(r.error);
+      hot = BigInt(r.balance || 0); receivable = BigInt(r.receivable ?? r.pending ?? 0);
+    } catch (e) { hot = null; receivable = null; hotError = String((e && e.message) || e).slice(0, 160); }
 
     const sum = rows => rows.reduce((a, r) => a + BigInt(r.amount_raw), 0n);
     // The size of the budget behind the hot wallet is not published, by the funder's
@@ -190,7 +195,9 @@ async function load() {
     // address must never reach a public page.
     const R = rows => rows.map(r => { const o = { ...r }; for (const f of Object.keys(o)) if (typeof o[f] === 'string') o[f] = redact(o[f]); return o; });
     cache = { at: Date.now(), data: { generated_at: new Date().toISOString(), address: ADDRESS,
-      numbers: { hot, receivable, tranches, costs, sent, received, spent_total: sent.nano + costs, burn_30d: burn, external, counterparties },
+      // `hot` and `receivable` are null, not 0, when the node could not be asked; hot_error says why. A reader of /log.json
+      // that wants a number must handle null, which is the point: zero would be a false balance.
+      numbers: { hot, receivable, hot_error: hotError, tranches, costs, sent, received, spent_total: sent.nano + costs, burn_30d: burn, external, counterparties },
       initiatives: R(initiatives).map(i => ({ ...i, spent_raw: (spent[i.id] || 0n).toString() })),
       ledger: R(ledger), decisions: R(decisions), requests: R(requests),
       wakes: R(wakes), reports: R(reports) } };
@@ -312,7 +319,7 @@ function home(d, sd) {
 <tr><td class="num">${xno(n.external.nano, 3)}</td><td>received from addresses pursekeeper never paid, from <b>${n.external.counterparties}</b> counterpart${n.external.counterparties === 1 ? 'y' : 'ies'}${n.external.below_threshold ? ` (plus ${n.external.below_threshold} address${n.external.below_threshold === 1 ? '' : 'es'} below the threshold)` : ''}${n.external.donations > 0n ? `. Of that, ${xno(n.external.donations, 3)} was a donation from ${esc(n.external.donation_names.join(', '))}: support for the experiment, not agent usage. Usage from strangers: <b>${xno(n.external.usage, 3)}</b>` : ''}</td></tr>
 <tr><td class="num">${n.counterparties.both}</td><td>distinct addresses pursekeeper has transacted with in either direction (${n.counterparties.out} paid, ${n.counterparties.in} received from${n.counterparties.in_below_threshold ? `, ${n.counterparties.in_below_threshold} more below the threshold` : ''})</td></tr>
 <tr><td class="num">${xno(n.sent.nano, 3)}</td><td>sent by pursekeeper in <b>${n.sent.count}</b> payment${n.sent.count === 1 ? '' : 's'} to ${n.sent.addresses} address${n.sent.addresses === 1 ? '' : 'es'}; ${xno(n.received.nano, 3)} received in ${n.received.count}</td></tr>
-<tr><td class="num">${xno(n.burn_30d, 2)}</td><td>spent in the last 30 days, payments plus domains and services. ${xno(n.spent_total, 2)} spent in total. The <a href="${EXPLORER}${ADDRESS}">hot wallet</a> holds ${xno(n.hot + n.receivable, 2)}</td></tr>
+<tr><td class="num">${xno(n.burn_30d, 2)}</td><td>spent in the last 30 days, payments plus domains and services. ${xno(n.spent_total, 2)} spent in total. The <a href="${EXPLORER}${ADDRESS}">hot wallet</a> ${n.hot === null ? 'balance could not be read from the node at this moment' + (n.hot_error ? ` (<code>${esc(n.hot_error)}</code>)` : '') + '; this is not a zero balance' : 'holds ' + xno(n.hot + n.receivable, 2)}</td></tr>
 </table>
 <p class="muted">An address that pays pursekeeper counts as a counterparty only once it has sent Ӿ${n.external.min_nano} in total, the same rule the agent's own wallet tool applies, so dust from throwaway accounts cannot inflate the count. The amount received counts every raw. Addresses pursekeeper paid count regardless. A one-time pass-through wallet (opened by one receive from one account, emptied to pursekeeper and a platform fee, as Subnano purchases and tips arrive) is counted as the account that funded it${n.external.passthrough_wallets ? `; ${n.external.passthrough_wallets} such wallet${n.external.passthrough_wallets === 1 ? '' : 's'} so far` : ''}.</p>
 <p class="muted">Also counted, but by hand and only in reviews: code shipped by someone else that uses what pursekeeper built, and mentions it did not pay for. Followers, page views and pursekeeper's own transactions are not the point.</p>
@@ -693,4 +700,7 @@ async function handle(req, res, u, send) {
   return false;
 }
 
-module.exports = { handle, page, redact, esc, xno, addr, hash, when, day, facilitatorPage, facilitatorData, counterpartyNumbers, inflowLabels, reclassifyCold, coldSenders, passthroughSources, COLD, nanoToRaw, COUNTERPARTY_MIN_NANO, COUNTERPARTY_MIN_RAW, DB_PATH, RPC, ADDRESS, EXPLORER };
+// load() is exported for tests only: the balance the home page publishes is worth a case of its own, and it is built here.
+// clearCache() drops the ten-minute cache so a test can drive a fresh read against a mocked node.
+function clearCache() { cache = { at: 0, data: null }; }
+module.exports = { handle, page, redact, esc, xno, addr, hash, when, day, facilitatorPage, facilitatorData, counterpartyNumbers, inflowLabels, reclassifyCold, coldSenders, passthroughSources, COLD, nanoToRaw, COUNTERPARTY_MIN_NANO, COUNTERPARTY_MIN_RAW, DB_PATH, RPC, ADDRESS, EXPLORER, loadForTest: load, clearCache };
