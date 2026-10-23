@@ -833,13 +833,23 @@ const REQUESTS_MAX = Number(process.env.REQUESTS_MAX || 20);
 // The most one answer will list even when asked: a log line is small, but the answer is served per request and 20 000
 // entries of one hash is already a 2 MB reply from a file read on the request path.
 const REQUESTS_HARD_MAX = 5000;
-function reqLogFor(hash, limit = REQUESTS_MAX) {
+// Paging (llmrt, 2026-10-23, api#116): limit alone cannot reach entries past REQUESTS_HARD_MAX. A hash worked 5,001
+// times answered truncated:true with a next line telling the caller to pass limit=5000 "for all of them", which is the same
+// newest 5,000 again: the oldest entry was unreachable, and this route exists so a reader can prove a hash was not used
+// here. cursor is the number of matching entries to skip, counting from the newest (0, the default, is the newest page). The
+// answer carries next_cursor when more matching entries follow, so a reader walks the whole log one page at a time without
+// gaps or repeats. An index rather than a timestamp: two entries in the same millisecond would make a timestamp cursor skip
+// or repeat a line.
+function reqLogFor(hash, limit = REQUESTS_MAX, cursor = 0) {
   let lines = [];
   try { lines = fs.readFileSync(REQ_LOG, 'utf8').split('\n').filter(Boolean); } catch { return []; }
   const out = [];
+  let seen = 0;
   for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
     let e; try { e = JSON.parse(lines[i]); } catch { continue; }
-    if (e.hash === hash || e.previous === hash) out.push(e);
+    if (e.hash !== hash && e.previous !== hash) continue;
+    if (seen++ < cursor) continue;   // skip the matching entries this page already showed
+    out.push(e);
   }
   return out;
 }
@@ -1537,12 +1547,27 @@ const server = http.createServer(async (req, res) => {
         if (!/^\d{1,6}$/.test(want) || Number(want) < 1) return send(res, 400, { error: 'limit must be a positive integer (at most ' + REQUESTS_HARD_MAX + ')' });
         limit = Math.min(Number(want), REQUESTS_HARD_MAX);
       }
-      const entries = reqLogFor(h, limit), total = reqLogCount(h);
-      return send(res, 200, { hash: h, found: entries.length > 0, entries, total,
-        // The bound is the answer's own: a reader who needs every entry pages with `limit` (up to the total) rather than
-        // reading the newest 20 as the whole log, which is what this route did until 2026-10-23 (llmrt).
-        truncated: total > entries.length,
-        ...(total > entries.length ? { next: 'this answer lists the newest ' + entries.length + ' of ' + total + ' entries for this hash; pass limit=' + Math.min(total, REQUESTS_HARD_MAX) + ' for all of them' } : {}),
+      // cursor: how many matching entries to skip from the newest (api#116). Without it a hash with more than
+      // REQUESTS_HARD_MAX entries could not be read past the newest page at all, because the `next` line told the caller to
+      // pass limit=5000 "for all of them" and got the same page back.
+      const wantCursor = u.searchParams.get('cursor');
+      let cursor = 0;
+      if (wantCursor !== null) {
+        if (!/^\d{1,9}$/.test(wantCursor)) return send(res, 400, { error: 'cursor must be a non-negative integer: how many matching entries to skip from the newest' });
+        cursor = Number(wantCursor);
+      }
+      const entries = reqLogFor(h, limit, cursor), total = reqLogCount(h);
+      const nextCursor = cursor + entries.length;
+      const more = nextCursor < total;
+      // found is about the hash, not about this page: a cursor past the end answers an empty page for a hash that was used
+      // 5,001 times, and `found: false` there would read as "pursekeeper.dev was not used for this block", which is the one
+      // question this route exists to answer. The first version of the cursor keyed it on the page's own length.
+      return send(res, 200, { hash: h, found: total > 0, entries, total, cursor, next_cursor: more ? nextCursor : null,
+        // The bound is the answer's own: a reader who needs every entry pages with `limit` and `cursor` rather than reading
+        // the newest 20 as the whole log, which is what this route did until 2026-10-23 (llmrt).
+        truncated: more,
+        ...(more ? { next: 'this answer lists entries ' + cursor + ' to ' + (nextCursor - 1) + ' of ' + total + ' for this hash, newest first; pass cursor=' + nextCursor + ' (and the same limit) for the next page' } : {}),
+        ...(cursor > 0 ? { note_page: 'entries ' + cursor + ' onward, newest first' } : {}),
         note: 'every /v1/work and /v1/process call since 2026-09-16, and every block broadcast here for an x402 payment (paid routes and the facilitator) since 2026-10-23, is logged here by hash; absence means pursekeeper.dev was not used for that block' });
     }
     if (u.pathname === '/v1/credit') {
