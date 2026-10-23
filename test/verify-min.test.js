@@ -111,6 +111,20 @@ test('combined: any=1&to=A and any=1&any_to=1 are ok:true with both flags echoed
   assert.equal(both.body.any_amount, true); assert.equal(both.body.any_to, true); assert.equal(both.body.expected_to, null); assert.equal(both.body.to, TO);
 });
 
+// 2026-10-23 (llmrt): nano_ and xrb_ are two spellings of one account, and the chain reports every destination as nano_.
+// A caller passing its own address in the older xrb_ spelling was told the block was sent "not to xrb_..." for the account it
+// did pay, so a seller that keeps its address in the pre-rename form read a real payment as unpaid. The facilitator already
+// normalises payTo (facilitator.js nanoPrefix); this route now answers the same way.
+test('an xrb_ spelling of the destination is the same account and answers ok:true', async () => {
+  const xrb = TO.replace(/^nano_/, 'xrb_');
+  const r = await verify('hash=' + HASH + '&to=' + xrb + '&min_raw=1');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.ok, true, JSON.stringify(r.body));
+  assert.equal(r.body.reason, undefined);
+  assert.equal(r.body.expected_to, TO, 'the answer echoes the canonical nano_ spelling');
+  assert.equal(r.body.to, TO);
+});
+
 // 2026-10-01 (pyfile-toolkit, item 5): a threshold above 2^128-1 reached the node, which refused it, and the refusal was
 // served as 502. The parser now refuses it with 400 on both routes; 2^128-1 itself is accepted.
 const MAX = (2n ** 128n - 1n).toString(), OVER = (2n ** 128n).toString();
