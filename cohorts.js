@@ -207,11 +207,10 @@ function classify(cp, chain, refunds = loadRefundHashes()) {
   // 4. repeat: every send between the two accounts, either direction, by chain time
   const events = [...ourSends.map(b => ({ at: ts(b), dir: 'out', hash: b.hash })), ...theirSends.map(b => ({ at: ts(b), dir: 'in', hash: b.hash }))]
     .sort((a, b) => a.at - b.at);
-  const first = events[0];
-  const within = first ? events.filter(e => e.at - first.at <= WINDOW_DAYS * 86400).length : 0;
-  const interactions = { count: events.length, within_30d: within, repeat: within > 1, first_at: first ? iso(first.at) : null, last_at: events.length ? iso(events[events.length - 1].at) : null };
+  const times = events.map(e => e.at);
+  const interactions = interactionsOf(times);
 
-  return {
+  const row = {
     address: cp.address,
     wallet_state, funding, first_receipt, first_spend, first_spend_status, interactions,
     paid_raw: sum(ourSends).toString(), paid_count: ourSends.length,
@@ -219,6 +218,8 @@ function classify(cp, chain, refunds = loadRefundHashes()) {
     reasons: cp.reasons.map(r => { r = site.redact(r); return r.length > REASON_CHARS ? r.slice(0, REASON_CHARS - 1) + '…' : r; }),
     initiative_ids: cp.initiative_ids
   };
+  Object.defineProperty(row, '_times', { value: times, configurable: true });
+  return row;
 }
 
 // An address counts as a counterparty if pursekeeper paid it, or once it has sent
@@ -280,7 +281,7 @@ async function computeCohorts({ ledger = readLedger(), rpc = cachedRpc } = {}) {
         reasons: cp.reasons.map(r => site.redact(r).slice(0, REASON_CHARS)), initiative_ids: cp.initiative_ids, chain_error: e.message });
     }
   }
-  rows.splice(0, rows.length, ...mergePassThrough(rows, via));
+  rows.splice(0, rows.length, ...mergePassThrough(rows, via, own));
   for (const r of rows) r.counts_as_counterparty = countsAsCounterparty(r);
   rows.sort((a, b) => (a.interactions.first_at || '').localeCompare(b.interactions.first_at || ''));
   return { generated_at: new Date().toISOString(), address: ADDRESS, window_days: WINDOW_DAYS, scan_limit: SCAN, rows, totals: totalsOf(rows) };
@@ -291,22 +292,44 @@ async function computeCohorts({ ledger = readLedger(), rpc = cachedRpc } = {}) {
 // counterparties, not eleven. Without this the home page reported 28 strangers from addresses
 // pursekeeper never paid while this page reported 56 independently-earned addresses for the same
 // ledger, and a wallet opened by a buyer pursekeeper had paid was shown as a stranger (2026-10-23).
-function mergePassThrough(rows, via) {
+function interactionsOf(times) {
+  const sorted = [...times].sort((a, b) => a - b);
+  const first = sorted[0];
+  const within = first !== undefined ? sorted.filter(t => t - first <= WINDOW_DAYS * 86400).length : 0;
+  return { count: sorted.length, within_30d: within, repeat: within > 1, first_at: first !== undefined ? iso(first) : null, last_at: sorted.length ? iso(sorted[sorted.length - 1]) : null };
+}
+function rowTimes(r) {
+  if (Array.isArray(r._times)) return r._times;
+  const i = r.interactions || {};
+  if (!i.count) return [];
+  const t0 = i.first_at ? Math.floor(Date.parse(i.first_at) / 1000) : 0;
+  const t1 = i.last_at ? Math.floor(Date.parse(i.last_at) / 1000) : t0;
+  return i.count === 1 ? [t0] : [t0, ...new Array(Math.max(0, i.count - 2)).fill(t0), t1];
+}
+function mergePassThrough(rows, via, own = new Set([ADDRESS])) {
   if (!via.size) return rows;
   const byAddress = new Map(rows.map(r => [r.address, r]));
   const dropped = new Set();
   const added = [];
   for (const [wallet, funder] of via) {
     const w = byAddress.get(wallet);
-    if (!w || dropped.has(wallet) || wallet === funder) continue;
+    if (!w || dropped.has(wallet) || wallet === funder || funder === ADDRESS || own.has(funder)) continue;
     let f = byAddress.get(funder);
-    if (!f) { f = { ...w, address: funder, via_wallets: [wallet] }; byAddress.set(funder, f); added.push(f); }   // the first folded wallet is named too (fix-up on PR #105)
-    else {
+    if (!f) {
+      f = { ...w, address: funder, via_wallets: [wallet] };
+      Object.defineProperty(f, '_times', { value: rowTimes(w), configurable: true });
+      byAddress.set(funder, f); added.push(f);   // the first folded wallet is named too (fix-up on PR #105)
+    } else {
       f.paid_raw = (BigInt(f.paid_raw) + BigInt(w.paid_raw)).toString();
       f.received_raw = (BigInt(f.received_raw) + BigInt(w.received_raw)).toString();
       f.paid_count += w.paid_count;
       f.received_count += w.received_count;
-      f.interactions = { ...f.interactions, count: f.interactions.count + w.interactions.count };
+      const paidByUs = Boolean((f.funding && f.funding.grant_funded) || (w.funding && w.funding.grant_funded) || f.paid_count > 0);
+      const paidUs = Boolean((f.funding && f.funding.paid_us) || (w.funding && w.funding.paid_us) || f.received_count > 0);
+      f.funding = { grant_funded: paidByUs, independently_earned: paidUs && !paidByUs, paid_us: paidUs };
+      const times = [...rowTimes(f), ...rowTimes(w)];
+      Object.defineProperty(f, '_times', { value: times, configurable: true });
+      f.interactions = interactionsOf(times);
       f.reasons = [...new Set([...f.reasons, ...w.reasons])];
       f.initiative_ids = [...new Set([...f.initiative_ids, ...w.initiative_ids])];
       (f.via_wallets = f.via_wallets || []).push(wallet);
@@ -422,7 +445,7 @@ async function handle(req, res, u, send) {
   return false;
 }
 
-module.exports = { ownFromFile, computeCohorts, warm, classify, collect, addChainOnly, isRefund, totalsOf, countsAsCounterparty, render, markdown, handle, ZERO, SCAN, WINDOW_DAYS };
+module.exports = { ownFromFile, computeCohorts, mergePassThrough, warm, classify, collect, addChainOnly, isRefund, totalsOf, countsAsCounterparty, render, markdown, handle, ZERO, SCAN, WINDOW_DAYS };
 
 if (require.main === module) {
   computeCohorts().then(d => console.log(markdown(d))).catch(e => { console.error(e.message); process.exit(1); });
