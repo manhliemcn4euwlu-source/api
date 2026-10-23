@@ -48,6 +48,9 @@ async function get(url) {
 test('an answer that drops entries says so, counts them, and pages on request', async () => {
   const before = fs.existsSync(REQ_LOG) ? fs.readFileSync(REQ_LOG) : null;
   try {
+    // Start from an empty log: the copied live log can already hold these fixed hashes (six real /v1/work calls on
+    // 'A'.repeat(64) landed on 2026-10-22, and the count below read 9 against a copy of that day's data).
+    fs.writeFileSync(REQ_LOG, '');
     for (let i = 0; i < 25; i++) logReq(req, { kind: 'process', hash: null, previous: FREE_H, ok: false, error: 'missing account' });
     const dflt = await get('/v1/requests?hash=' + FREE_H);
     assert.equal(dflt.status, 200);
