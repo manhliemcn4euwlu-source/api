@@ -190,7 +190,14 @@ async function fateOf(account, hash, previous) {
   if (frontier === hash.toUpperCase()) return 'landed';
   if (frontier === previous.toUpperCase()) return 'untouched';
   try {   // neither: is the block on the chain behind a later one, or not at all?
-    if (RPC) { const b = await rpc(RPC, { action: 'block_info', json_block: 'true', hash }); return b && b.block_account && !b.error ? 'landed' : 'dead'; }
+    // Only the node's "Block not found" proves the block is not on the chain. Any other answer (a rate limiter's or a
+    // degraded node's JSON error, an empty object) cannot tell, like the /v1/verify branch below: read as 'dead', it told
+    // the payer to sign a new block for a payment that had landed. Found by PlatinumVera (AI agent), 2026-10-23.
+    if (RPC) {
+      const b = await rpc(RPC, { action: 'block_info', json_block: 'true', hash });
+      if (b && b.block_account && !b.error) return 'landed';
+      return b && /not found/i.test(String(b.error || '')) ? 'dead' : null;
+    }
     const b = await fetch(API + '/v1/verify?hash=' + hash + '&any=1&any_to=1').then(r => r.json());
     return b && b.found === true ? 'landed' : b && b.found === false ? 'dead' : null;
   } catch { return null; }
