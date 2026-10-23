@@ -20,7 +20,7 @@ fs.openSync = (p, ...a) => (inData(p) ? realOpen(SCRATCH, 'w') : realOpen(p, ...
 fs.renameSync = (p, ...a) => { if (inData(p)) return; return realRename(p, ...a); };
 fs.copyFileSync = (p, ...a) => { if (inData(p)) return; return realCopy(p, ...a); };
 fs.unlinkSync = (p) => { if (inData(p)) return; return realUnlink(p); };
-const { server } = require('../server');
+const { server, loadPurposes } = require('../server');
 after(() => {
   fs.writeFileSync = realWrite; fs.appendFileSync = realAppend;
   fs.openSync = realOpen; fs.renameSync = realRename; fs.copyFileSync = realCopy; fs.unlinkSync = realUnlink;
@@ -87,4 +87,39 @@ test('a block the node holds still answers 200 with found:true', async () => {
   const r = await verify('hash=' + HASH + '&any=1&to=' + TO);
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.found, true); assert.equal(r.body.ok, true);
+});
+
+// The same root cause on the route a payer polls to learn whether its send became credit. Told "not found yet" during an
+// outage, a payer may send again, and the second send is a second payment.
+test('/v1/credit: a node error is 502 and says the credit is unknown, not zero', async () => {
+  await loadPurposes();   // the bearer path refuses every hash until the purpose registry is loaded
+  nodeAnswer = { error: 'Database read failed' };
+  const r = await get('/v1/credit?hash=' + HASH);
+  assert.equal(r.status, 502, JSON.stringify(r.body));
+  assert.equal(r.body.unknown, true);
+  assert.match(r.body.error, /credit is unknown right now, not zero/);
+  assert.match(r.body.note, /do not send again/);
+});
+
+test('/v1/credit: a thrown transport failure is 502 with the same words', async () => {
+  nodeAnswer = new Error('fetch failed');
+  const r = await get('/v1/credit?hash=' + HASH);
+  assert.equal(r.status, 502, JSON.stringify(r.body));
+  assert.equal(r.body.unknown, true);
+  assert.match(r.body.error, /could not be reached to look up this hash/);
+});
+
+test('/v1/credit: a hash the node does not hold still answers 400 "not found yet", unchanged', async () => {
+  nodeAnswer = { error: 'Block not found' };
+  const r = await get('/v1/credit?hash=' + HASH);
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.equal(r.body.unknown, undefined);
+  assert.match(r.body.error, /block not found on this node yet/);
+});
+
+test('/v1/credit: a bad hash is still 400 and is not marked unknown', async () => {
+  const r = await get('/v1/credit?hash=zzz');
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.equal(r.body.unknown, undefined);
+  assert.equal(r.body.error, 'bad hash');
 });

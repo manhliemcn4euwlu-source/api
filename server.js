@@ -345,8 +345,17 @@ async function creditForUnlocked(hash) {
     if (reason) { noCredit.set(hash, reason); if (credits[hash] !== '0') { credits[hash] = '0'; save(); } return { error: reason }; }
     return { remaining: BigInt(credits[hash]) };
   }
-  const b = await rpc({ action: 'block_info', json_block: 'true', hash });
-  if (b.error) return { error: 'block not found on this node yet; wait a second and retry' };
+  // Same root cause as /v1/verify below: any node error used to read as "this send is not on the chain yet". Here the answer
+  // costs more than a wrong field, because this route is what a payer polls to learn whether the Nano it sent became credit: a
+  // payer told "not found yet" during a node outage may send again, and the second send is a second payment (llmrt, 2026-10-23).
+  // Only the node's own words mean absent; anything else says the credit is unknown right now.
+  let b;
+  try { b = await rpc({ action: 'block_info', json_block: 'true', hash }); }
+  catch (e) { return { error: 'the node could not be reached to look up this hash (' + String((e && e.message) || e) + '); the credit is unknown right now, not zero: retry, do not send again', unknown: true }; }
+  if (b.error) {
+    if (/\bblock not found\b/i.test(String(b.error))) return { error: 'block not found on this node yet; wait a second and retry' };
+    return { error: 'the node could not answer for this hash (' + String(b.error).slice(0, 160) + '); the credit is unknown right now, not zero: retry, do not send again', unknown: true };
+  }
   if (b.confirmed !== 'true') return { error: 'block not confirmed yet; retry shortly' };
   if (b.subtype !== 'send' || b.contents.link_as_account !== ADDRESS)
     return { error: 'not a send to ' + ADDRESS };
@@ -1410,7 +1419,11 @@ const server = http.createServer(async (req, res) => {
       if (overFreeLimit(req, checkHits.credit, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
       countCheck('credit', req);
       const c = await creditFor(u.searchParams.get('hash') || '');
-      if (c.error) return send(res, 400, { error: c.error });
+      // 400 means the request or the block is wrong; 502 means the node could not be asked and the credit is unknown. The
+      // two used to share 400, so a payer reading only the status could not tell a bad hash from an outage, and the body said
+      // "not found yet" for both (llmrt, 2026-10-23). `unknown: true` marks the second so a client that reads the body can
+      // branch without the status.
+      if (c.error) return send(res, c.unknown ? 502 : 400, { error: c.error, ...(c.unknown ? { unknown: true, note: 'retry; do not send again' } : {}) });
       const body = { remaining_raw: c.remaining.toString(), remaining_nano: nano(c.remaining) };
       // A send past the cap is credited at the cap, and the reply names what was not applied (pursekeeper, 2026-10-22).
       if (c.capped) { body.capped = true; body.amount_raw = c.amount_raw; body.excess_raw = c.excess_raw; }
