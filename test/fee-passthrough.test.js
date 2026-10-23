@@ -6,6 +6,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+require('./guard-data');   // every write under data/ is dropped before the server boots (counters, ledgers, logs)
 const { feePassthrough, FEE_COLLECTORS } = require('../server');
 
 const ME = 'nano_1xug1q5t7nxoj3ywwzokiea9jz8fq8qfgzp8pbyfr3co3e5xgj755uofu8ue';

@@ -4,6 +4,8 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+// Not guarded with test/guard-data.js: this file tests the real append path of data/requests.jsonl and restores the
+// log itself afterwards. Run the suite in a worktree against a copy of data/, as the README says, not in the live dir.
 const {logReq, reqLogFor, REQ_LOG} = require('../server');
 const H = 'C'.repeat(64), P = 'D'.repeat(64), X = 'E'.repeat(64);
 const req = {headers: {'x-forwarded-for': '203.0.113.9'}, socket: {remoteAddress: '127.0.0.1'}};

@@ -8,6 +8,7 @@ process.env.NANO_RPC = 'http://node.test/rpc';
 const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const N = require('nanocurrency');
+require('./guard-data');   // every write under data/ is dropped before the server boots (counters, ledgers, logs)
 const { workFor } = require('../server');
 
 const THRESHOLD = 'ff00000000000000';

@@ -4,6 +4,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+require('./guard-data');   // every write under data/ is dropped before the server boots (counters, ledgers, logs)
 const { isPrivate, expand6 } = require('../server');
 
 const PRIVATE = ['10.0.0.1', '127.0.0.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '192.0.0.1', '224.0.0.1',

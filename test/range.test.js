@@ -4,6 +4,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const zlib = require('node:zlib');
+require('./guard-data');   // every write under data/ is dropped before the server boots (counters, ledgers, logs)
 const {send} = require('../server');
 function fakeRes(range, gzip) {
   const r = {byteRange: range, acceptsGzip: !!gzip, writeHead(code, headers) { r.code = code; r.headers = headers; }, end(b) { r.body = b === undefined ? Buffer.alloc(0) : Buffer.from(b); }};

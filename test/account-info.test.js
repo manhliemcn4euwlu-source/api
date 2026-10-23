@@ -3,6 +3,7 @@
 // the documented confirmation height came back null because only the legacy field names were read.
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
+require('./guard-data');   // every write under data/ is dropped before the server boots (counters, ledgers, logs)
 const {shapeAccountInfo} = require('../server');
 const F = 'A'.repeat(64), E = 'B'.repeat(64);
 const base = {frontier: F, balance: '5000', confirmed_balance: '5000', block_count: '45', representative: 'nano_1rep'};

@@ -10,12 +10,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 process.env.NANO_RPC = 'http://node.test/rpc';
-const DATA_DIR = path.join(__dirname, '..', 'data') + path.sep;
-const realWrite = fs.writeFileSync, realAppend = fs.appendFileSync;
-fs.writeFileSync = (p, ...a) => { if (String(p).startsWith(DATA_DIR)) return; return realWrite(p, ...a); };
-fs.appendFileSync = (p, ...a) => { if (String(p).startsWith(DATA_DIR)) return; return realAppend(p, ...a); };
+// Every write under data/ is dropped, the atomic store's openSync/rename path included: data/checks.json is written on
+// every counted call since 2026-10-23 and this file makes 60 of them (see test/guard-data.js).
+const guard = require('./guard-data');
 const {server} = require('../server');
-after(() => { fs.writeFileSync = realWrite; fs.appendFileSync = realAppend; });
+after(() => guard.restore());
 
 const A = 'nano_1xug1q5t7nxoj3ywwzokiea9jz8fq8qfgzp8pbyfr3co3e5xgj755uofu8ue';
 const H = 'AB'.repeat(32);
