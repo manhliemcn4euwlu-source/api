@@ -69,3 +69,27 @@ test('each route stops at its own 60, and the neighbour is unaffected', async ()
   assert.equal((await get('/v1/verify?hash=' + H + '&any=1', ip)).status, 200);
   assert.ok(rpcCalls > 0, 'the mocked node was reached, so the 200s are real answers');
 });
+
+// llmrt, 2026-10-23: /v1/receivable asked the node for a fixed 100 hashes and said nothing about the bound, so an account
+// with more than 100 unpocketed sends read 100 of them as if that were the whole list. The answer now names the truncation and
+// says how to read the rest.
+test('/v1/receivable says when the node bound cut the list short', async () => {
+  const ip = '198.51.100.16';
+  const many = {};
+  for (let i = 0; i < 100; i++) many[i.toString(16).toUpperCase().padStart(2, '0').repeat(32)] = { amount: '1000000000000000000000000000', source: A };
+  const savedFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ blocks: many }) });
+  try {
+    const full = await get('/v1/receivable?account=' + A, ip);
+    assert.equal(full.status, 200);
+    assert.equal(full.body.count, 100);
+    assert.equal(full.body.truncated, true, 'a full page must say it may not be the whole list');
+    assert.match(String(full.body.next), /poll again/);
+    const few = {}; few['AB'.repeat(32)] = { amount: '1000000000000000000000000000', source: A };
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ blocks: few }) });
+    const part = await get('/v1/receivable?account=' + A, ip);
+    assert.equal(part.status, 200);
+    assert.equal(part.body.truncated, false);
+    assert.equal(part.body.next, undefined);
+  } finally { globalThis.fetch = savedFetch; }
+});

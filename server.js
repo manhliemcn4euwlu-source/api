@@ -756,6 +756,9 @@ function overFreeLimit(req, map, limit, res) {
   return false;
 }
 const MAX_RAW = 2n ** 128n - 1n;   // a Nano balance is a u128; the node answers "Bad threshold number" above it
+// How many receivable hashes one /v1/receivable call asks the node for. A node answers at most this many per call; the answer
+// says so when it hits the bound (llmrt, 2026-10-23).
+const RECEIVABLE_MAX = Number(process.env.RECEIVABLE_MAX || 100);
 function minRawOf(u) {
   const raw = u.searchParams.get('min_raw'), n = u.searchParams.get('min_nano');
   // Above 2^128-1 the node refused the threshold and the refusal was served as 502 (pyfile-toolkit, item 5, 2026-09-30);
@@ -811,11 +814,17 @@ async function receivable(req, res, u) {
   const account = u.searchParams.get('account') || '';
   if (!nanocurrency.checkAddress(account)) return send(res, 400, { error: 'account must be a nano_ address' });
   let minRaw; try { minRaw = minRawOf(u); } catch (e) { return send(res, 400, { error: e.message }); }
-  const r = await rpc({ action: 'receivable', account, count: '100', source: 'true', include_only_confirmed: 'true', threshold: (minRaw !== null && minRaw > 0n ? minRaw : 1n).toString() });
+  const r = await rpc({ action: 'receivable', account, count: String(RECEIVABLE_MAX), source: 'true', include_only_confirmed: 'true', threshold: (minRaw !== null && minRaw > 0n ? minRaw : 1n).toString() });
   if (r.error) return send(res, 502, { error: 'node: ' + r.error });
   const blocks = Object.entries(r.blocks && typeof r.blocks === 'object' ? r.blocks : {}).map(([hash, v]) => ({ hash, amount_raw: String(v.amount), amount_nano: nano(v.amount), from: v.source }));
   const total = blocks.reduce((a, b) => a + BigInt(b.amount_raw), 0n);
   return send(res, 200, { account, count: blocks.length, total_raw: total.toString(), total_nano: nano(total), blocks, confirmed_only: true,
+    // A node answers at most `count` receivable hashes per call, and until 2026-10-23 the count was fixed at 100 with no
+    // word in the answer or the README: a seller with more than 100 unpocketed sends read 100 of them as if that were all, and
+    // the rest were invisible to the poll that is meant to find every payment (llmrt, 2026-10-23). `truncated` is the node's own
+    // signal for that, and `next` says how to read the rest.
+    truncated: blocks.length >= RECEIVABLE_MAX,
+    ...(blocks.length >= RECEIVABLE_MAX ? { next: 'the node answered its maximum of ' + RECEIVABLE_MAX + ' receivable hashes; pocket these, then poll again for the rest' } : {}),
     note: 'confirmed sends to this account that have not been pocketed with a receive block; each is final and spendable once received. Pocketing needs a signed receive block and work (POST /v1/work).', checked_at: new Date().toISOString(), node: 'pursekeeper.dev' });
 }
 
