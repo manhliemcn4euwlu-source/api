@@ -192,6 +192,12 @@ let credits = store.value;
 if (store.damaged) console.error('credits: ' + DATA + ' is damaged (' + store.error + ')' + (store.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
 const save = () => writeJsonAtomic(DATA, credits);
 const stats = { calls_paid: 0, calls_x402: 0, calls_402: 0, started: new Date().toISOString() };
+// A handed-back call is one that was charged and then not served (a target that never answered, a work_generate failure, a
+// redirect that could not be followed). Its price goes back on the hash as credit, so it must stop counting as a paid call:
+// until 2026-10-23 only calls_paid was rolled back, and an x402 payment that bought nothing left calls_x402 raised, so
+// /v1/stats could answer calls_x402 > calls_paid (llmrt, 2026-10-23, from the source). `rail` is how the call was charged:
+// 'x402' when the payment arrived as a PAYMENT-SIGNATURE, 'bearer' when it was an X-Nano-Payment hash.
+function unpay(rail) { stats.calls_paid--; if (rail === 'x402' && stats.calls_x402 > 0) stats.calls_x402--; }
 // The settled x402 blocks: the record that a block paid for a call, and the source of the known-payer list. Rewritten in
 // place, a crash mid-write emptied it and the catch answered [], so every settled payment left the public record and every
 // payer left the known-payer set (llmrt, item 5, 2026-10-20).
@@ -625,6 +631,7 @@ async function chargeX402Locked(req, res, payload, key) {
     stats.calls_paid++; stats.calls_x402++;
     res.setHeader(x402.RESPONSE_HEADER, x402.settleHeader(s));
     res.setHeader('x-nano-payment-hash', s.transaction);
+    res.chargeRail = 'x402';   // read by unpay() when the call is handed back
     res.paidHash = s.transaction; res.replayKey = replayKey(req); res.replayBind = { secret: replaySecret(payload) };
     return true;
   } finally { settling.delete(v.hash); }
@@ -677,7 +684,7 @@ async function workGenerate(req, res) {
       let note = '';
       const h = String(req.headers['x-nano-payment'] || res.getHeader('x-nano-payment-hash') || '').toUpperCase();
       if (paid && h && h in credits) {
-        const left = await withHashLock(h, async () => { credits[h] = (BigInt(credits[h] || '0') + PRICE_RAW).toString(); save(); stats.calls_paid--; return credits[h]; });
+        const left = await withHashLock(h, async () => { credits[h] = (BigInt(credits[h] || '0') + PRICE_RAW).toString(); save(); unpay(res.chargeRail); return credits[h]; });
         res.setHeader('x-nano-credit-remaining-raw', left); note = '; the ' + nano(PRICE_RAW) + ' NANO for this call was handed back as credit on ' + h + ', retry with X-Nano-Payment: ' + h;
       }
       return send(res, 502, { error: 'work_generate: ' + e.message + note });
@@ -889,6 +896,7 @@ async function charge(req, res) {
     save();
     stats.calls_paid++;
     res.setHeader('x-nano-credit-remaining-raw', left.toString());
+    res.chargeRail = 'bearer';
     res.paidHash = String(hash).toUpperCase(); res.replayKey = replayKey(req); res.replayBind = { bearer: true };
     return true;
   });
@@ -1343,7 +1351,7 @@ const server = http.createServer(async (req, res) => {
           // between another request's balance read and its debit write on the same hash and be overwritten, losing the
           // handed-back call (Ops Control HQ, 2026-09-27 17:28 UTC, from the source of the 16:41 UTC version).
           const left = await withHashLock(h, async () => {
-            credits[h] = (BigInt(credits[h] || '0') + PRICE_RAW).toString(); save(); stats.calls_paid--;
+            credits[h] = (BigInt(credits[h] || '0') + PRICE_RAW).toString(); save(); unpay(res.chargeRail);
             return credits[h];
           });
           res.setHeader('x-nano-credit-remaining-raw', left);
