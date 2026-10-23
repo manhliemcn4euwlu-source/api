@@ -44,7 +44,8 @@ function counterpartyNumbers(ledger, ownExtra = new Set(), minRaw = COUNTERPARTY
   // opened for one payment, funded by the buyer, emptied to pursekeeper and the platform
   // fee) is counted as the account that funded it, so eleven purchases by three buyers
   // are three counterparties, and a buyer pursekeeper had paid is not a stranger.
-  const cpLedger = ledger.filter(r => !ownExtra.has(r.counterparty)).map(r => via.has(r.counterparty) ? { ...r, counterparty: via.get(r.counterparty), via: r.counterparty } : r).filter(r => !ownExtra.has(r.counterparty));
+  const isOwn = a => a === ADDRESS || ownExtra.has(a);
+  const cpLedger = ledger.filter(r => !isOwn(r.counterparty)).map(r => via.has(r.counterparty) ? { ...r, counterparty: via.get(r.counterparty), via: r.counterparty } : r).filter(r => !isOwn(r.counterparty));
   const paid = new Set(cpLedger.filter(r => r.kind === 'payment_out').map(r => r.counterparty));
   const inTotals = new Map();
   for (const r of cpLedger) if (r.kind === 'payment_in') inTotals.set(r.counterparty, (inTotals.get(r.counterparty) || 0n) + BigInt(r.amount_raw));
@@ -115,9 +116,10 @@ const PASSTHROUGH_MAX_BLOCKS = 4;
 const viaCache = new Map();   // address -> funding account | null
 async function passthroughSources(ledger, rpcFn, ownExtra = new Set()) {
   const via = new Map();
-  const addrs = [...new Set(ledger.filter(r => r.kind === 'payment_in' && r.counterparty && r.counterparty.startsWith('nano_') && !ownExtra.has(r.counterparty)).map(r => r.counterparty))];
+  const isOwn = a => a === ADDRESS || ownExtra.has(a) || COLD.has(a);
+  const addrs = [...new Set(ledger.filter(r => r.kind === 'payment_in' && r.counterparty && r.counterparty.startsWith('nano_') && !isOwn(r.counterparty)).map(r => r.counterparty))];
   for (const a of addrs) {
-    if (viaCache.has(a)) { if (viaCache.get(a)) via.set(a, viaCache.get(a)); continue; }
+    if (viaCache.has(a)) { const src = viaCache.get(a); if (src && !isOwn(src)) via.set(a, src); continue; }
     try {
       const h = await rpcFn({ action: 'account_history', account: a, count: String(PASSTHROUGH_MAX_BLOCKS + 1) });
       const hist = h.history || [];
@@ -132,7 +134,7 @@ async function passthroughSources(ledger, rpcFn, ownExtra = new Set()) {
       const quick = Math.max(...ts) - Math.min(...ts) <= 3600;            // opened and emptied within an hour
       const ok = receives.length >= 1 && funders.size === 1 && sends.length + receives.length === hist.length && sends.some(x => x.account === ADDRESS) && emptied && quick;
       const src = ok ? [...funders][0] : null;
-      if (src && src !== a && !ownExtra.has(src) && !COLD.has(src)) { via.set(a, src); viaCache.set(a, src); }
+      if (src && src !== a && !isOwn(src)) { via.set(a, src); viaCache.set(a, src); }
     } catch { /* node unavailable: treat as its own counterparty this time, re-check later */ }
   }
   return via;
