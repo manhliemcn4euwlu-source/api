@@ -8,11 +8,14 @@ const assert = require('node:assert/strict');
 const { computeCohorts, totalsOf } = require('../cohorts');
 const { ADDRESS, passthroughSources } = require('../site');
 
+// Fixture accounts are synthetic (random keys): the modules under test read data/own-addresses.json and
+// data/cold-addresses.json, so a real account used as a fixture collides with the live exclusion lists and the
+// test's result depends on which box runs it (that is how one fixture failed here on 2026-10-23).
 const US = ADDRESS;
-const BUYER = 'nano_1oatxz8ha1j55m4wzkkgmpoyyn4gr9bgu9snnfyqc6toawb5ht5e8w4x6s9o';
-const P1 = 'nano_3gmd94aey5nxrntgjrznnbssh3s7htyubeq91x8qgjpbe8qk59xiarf1homu';
-const P2 = 'nano_16qcqjhqkgopyq6dtuoarwosma8z51asec4t5zki3eq78yiuz7i5kd7bdzyh';
-const GRANTEE = 'nano_1aitq5r815hcqqpojwyugdk8bd7k1s3g1bzeefp5eu38pj5w9j1j38zjcs7p';
+const BUYER = 'nano_38boeia1y1canbfz6makijpd5p8u45mrs44hjjz5rfdmmwfdoi1zoog6u5ot';
+const P1 = 'nano_3r5x65cfuaxpise8bgpjr5e5taq1racy8x9joctbub874b1zobnb13sy44ip';
+const P2 = 'nano_1max7uajiyhjebuap7cmj6n9xq7ra74485bhqwxzr76amzpximr3ozgh5xgo';
+const GRANTEE = 'nano_1whyyk4sndjr6tdxbdr1cr716zt5rkgjb5kjs9jj13zgpdqspn7xjace38s1';
 const XNO = 10n ** 30n;
 const T0 = 1_788_800_000;
 
@@ -28,8 +31,8 @@ const walletHistory = (wallet) => {
 const rpc = async body => {
   if (body.action === 'account_history' && body.account === US)
     return { history: [
-      { type: 'state', subtype: 'receive', account: P1, amount: String(XNO / 10n), hash: 'IN-3gmd', height: '1', local_timestamp: String(T0) },
-      { type: 'state', subtype: 'receive', account: P2, amount: String(XNO / 10n), hash: 'IN-1y95', height: '2', local_timestamp: String(T0 + 60) },
+      { type: 'state', subtype: 'receive', account: P1, amount: String(XNO / 10n), hash: 'IN-' + P1.slice(5, 9), height: '1', local_timestamp: String(T0) },
+      { type: 'state', subtype: 'receive', account: P2, amount: String(XNO / 10n), hash: 'IN-' + P2.slice(5, 9), height: '2', local_timestamp: String(T0 + 60) },
     ] };
   if (body.action === 'account_history' && (body.account === P1 || body.account === P2)) return { history: walletHistory(body.account) };
   if (body.action === 'account_history' && body.account === BUYER) return { history: [] };
@@ -64,13 +67,13 @@ test('two one-time wallets of one buyer are one counterparty, not two, and count
 test('a grant-funded buyer who pays us through a one-time wallet is marked paid_us and repeat_within_30d', async () => {
   const grantLedger = [
     { id: 1, ts: '2026-10-01T00:00:00Z', kind: 'payment_out', amount_raw: (XNO / 5n).toString(), counterparty: BUYER, reason: 'Grant', block_hash: 'GRANT-1' },
-    { id: 2, ts: '2026-10-01T00:01:00Z', kind: 'payment_in', amount_raw: (XNO / 10n).toString(), counterparty: P1, reason: 'Subnano purchase', block_hash: 'IN-3gmd' },
+    { id: 2, ts: '2026-10-01T00:01:00Z', kind: 'payment_in', amount_raw: (XNO / 10n).toString(), counterparty: P1, reason: 'Subnano purchase', block_hash: 'IN-' + P1.slice(5, 9) },
   ];
   const grantRpc = async body => {
     if (body.action === 'account_history' && body.account === US)
       return { history: [
         { type: 'state', subtype: 'send', account: BUYER, amount: String(XNO / 5n), hash: 'GRANT-1', height: '1', local_timestamp: String(T0) },
-        { type: 'state', subtype: 'receive', account: P1, amount: String(XNO / 10n), hash: 'IN-3gmd', height: '2', local_timestamp: String(T0 + 30) },
+        { type: 'state', subtype: 'receive', account: P1, amount: String(XNO / 10n), hash: 'IN-' + P1.slice(5, 9), height: '2', local_timestamp: String(T0 + 30) },
       ] };
     if (body.action === 'account_history' && body.account === P1) return { history: walletHistory(P1) };
     if (body.action === 'account_history' && body.account === BUYER)

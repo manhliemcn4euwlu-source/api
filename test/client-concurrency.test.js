@@ -271,7 +271,11 @@ test('signed cross-origin 307/308 responses are not followed and do not count as
   }
 });
 
-test('unsigned quote may redirect, but the signed call uses the URL that returned 402', async t => {
+test('unsigned quote redirected to another origin without HEADERS: refused before signing (exit 6), the other origin receives nothing', async t => {
+  // Until skill 0.3.13 a cross-origin quote redirect was followed when no HEADERS were set and the signed call went to
+  // the URL that answered 402. A 307/308 re-sends the method and body across origins (pyfile-toolkit, skill#6,
+  // 2026-10-23), so the client now refuses every cross-origin quote redirect, with or without HEADERS, before anything
+  // is sent there or signed. Same-origin hops are still followed (next test).
   const target = await redirectSink();
   t.after(() => target.close());
   const canonical = await mock({ redirectTo: target.origin + '/capture', redirectStatus: 307 });
@@ -281,16 +285,13 @@ test('unsigned quote may redirect, but the signed call uses the URL that returne
   try {
     const r = await run(entry.origin, dir, { METHOD: 'POST', BODY: '{"probe":"canonical"}', NANO_SAVE_PAYLOAD: proof });
     await Promise.all([entry.close(), canonical.close()]);
-    assert.equal(r.code, 1, r.err);
-    assert.equal(entry.state.probes, 1, 'original endpoint issued only an unsigned redirect');
-    assert.equal(canonical.state.probes, 1, 'canonical endpoint returned the quote');
-    assert.equal(canonical.state.paidCalls, 1, 'signed request went to the endpoint that returned 402');
-    assert.equal(target.requests.length, 0, 'signed 307 was not followed');
-    const saved = JSON.parse(fs.readFileSync(proof, 'utf8'));
-    assert.equal(saved.url, canonical.origin + '/buy');
-    assert.equal(saved.status, 307);
-    assert.equal(saved.served, false);
-    assert.ok(r.err.includes('Location origin ' + target.origin), r.err);
+    assert.equal(r.code, 6, r.err);
+    assert.equal(entry.state.probes, 1, 'original endpoint was asked once');
+    assert.equal(canonical.state.probes, 0, 'the other origin received no quote request');
+    assert.equal(canonical.state.paidCalls, 0, 'nothing was signed');
+    assert.equal(target.requests.length, 0);
+    assert.equal(fs.existsSync(proof), false, 'no payment was signed, so there is no payload to save');
+    assert.ok(r.err.includes(canonical.origin + ', another origin'), r.err);
   } finally {
     if (entry.server.listening) await entry.close();
     if (canonical.server.listening) await canonical.close();
@@ -314,7 +315,7 @@ test('unsigned quote redirected to another origin while HEADERS are set: refused
     assert.equal(other.state.probes, 0, 'the other origin received no quote request');
     assert.equal(other.state.paidCalls, 0, 'the other origin received no signed request');
     assert.equal(entry.state.infoReplies, 0, 'no account read, nothing signed');
-    assert.match(r.err, /refusing: the quote at .* redirected \(HTTP 307\) to /);
+    assert.match(r.err, /refusing: the (unsigned )?quote at .* redirected \(HTTP 307\) to /);
     assert.ok(r.err.includes(other.origin + ', another origin'), r.err);
     assert.doesNotMatch(r.err, /signed block/);
   } finally {

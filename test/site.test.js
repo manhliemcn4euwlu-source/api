@@ -6,8 +6,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { counterpartyNumbers, reclassifyCold, redact, passthroughSources, COLD, nanoToRaw, COUNTERPARTY_MIN_RAW, COUNTERPARTY_MIN_NANO, ADDRESS } = require('../site');
 
-const A = 'nano_1oatxz8ha1j55m4wzkkgmpoyyn4gr9bgu9snnfyqc6toawb5ht5e8w4x6s9o';
-const B = 'nano_3gmd94aey5nxrntgjrznnbssh3s7htyubeq91x8qgjpbe8qk59xiarf1homu';
+const A = 'nano_3s1m5exgw9rjeohudkrapco6hh46c8mp3ky87kac3tg6ysm3fuof7dunrxtz';
+const B = 'nano_17kan9js3g53c7dtou9o9ixncwnax6iuzobgiukhzmc8gp3ai45pa6q9sq5f';
 const C = 'nano_1i3y944esngqw6wb6ia68dotj4yuqctch9kx8ct65twt8ewi4rdcfgax7ggf';
 const D = 'nano_1coldcoldcoldcoldcoldcoldcoldcoldcoldcoldcoldcoldcoldcoldcd11';
 const row = (kind, counterparty, nano) => ({ kind, counterparty, amount_raw: nanoToRaw(nano).toString() });

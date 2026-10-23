@@ -6,9 +6,9 @@ const { classify, collect, addChainOnly, isRefund, totalsOf, computeCohorts, mar
 const { ADDRESS } = require('../site');
 
 const US = ADDRESS;
-const A = 'nano_1oatxz8ha1j55m4wzkkgmpoyyn4gr9bgu9snnfyqc6toawb5ht5e8w4x6s9o';
-const B = 'nano_3gmd94aey5nxrntgjrznnbssh3s7htyubeq91x8qgjpbe8qk59xiarf1homu';
-const FUNDER = 'nano_16qcqjhqkgopyq6dtuoarwosma8z51asec4t5zki3eq78yiuz7i5kd7bdzyh';
+const A = 'nano_3s1m5exgw9rjeohudkrapco6hh46c8mp3ky87kac3tg6ysm3fuof7dunrxtz';
+const B = 'nano_17kan9js3g53c7dtou9o9ixncwnax6iuzobgiukhzmc8gp3ai45pa6q9sq5f';
+const FUNDER = 'nano_3gchoita7jmtofp69goiowyrytnfdjz1srz9fy9t1jygagjiej1eqo7ecpe8';
 const XNO = 10n ** 30n;
 const T0 = 1_788_800_000; // some unix time
 const DAY = 86400;

@@ -9,7 +9,7 @@
 // Exit codes: 0 when the call was served (2xx), 1 when it ended on any other status or threw, 2 without a seed, 3 above the cap,
 //      4 when the seller's 402 resource breaks the x402 v2 ResourceInfo caps (nothing signed; the seller has to fix the 402),
 //      5 when the wallet lock wait reaches NANO_LOCK_WAIT_MS (including a missing/invalid holder PID), or a live holder reaches NANO_LOCK_MAX_MS (nothing signed),
-//      6 when the unsigned quote was redirected to another origin while HEADERS were supplied (nothing sent there, nothing signed).
+//      6 when the unsigned quote redirects to another origin, with or without HEADERS (nothing sent there, nothing signed).
 //      NANO_LOCK (the per-account lock below; default on, NANO_LOCK=0 turns it off), NANO_LOCK_DIR (where the lock file
 //      lives, default the system temp dir), NANO_LOCK_WAIT_MS (how long to wait for it, default 120000), NANO_LOCK_MAX_MS
 //      (refuse immediately if a live holder has held it this long; never take over a live holder; default 180000),
@@ -17,7 +17,7 @@
 //      API (no-node account-info service, default https://pursekeeper.dev),
 //      WORK_URL (optional RPC-style work_generate endpoint),
 //      HEADERS (optional JSON object of extra request headers, e.g. a Bearer token; sent only to the origin of the URL
-//      given: a quote redirect within that origin is followed with them, a redirect to another origin is refused, exit 6),
+//      given; unsigned quote redirects within that origin are followed, cross-origin redirects are refused with exit 6),
 //      METHOD and BODY (optional, e.g. METHOD=POST BODY='{"hash":"..."}' to buy a work
 //      from POST /v1/work; the same method and body are used for the 402 probe and the paid call),
 //      NANO_SAVE_PAYLOAD (optional path: after the call, the PAYMENT-SIGNATURE header value is written there as JSON with
@@ -31,9 +31,9 @@
 // nano:mainnet "exact" entry -> build and sign a send block for exactly that amount
 // -> retry with PAYMENT-SIGNATURE: base64 JSON {x402Version, resource, accepted,
 // payload: {block}} -> the seller verifies and broadcasts the block, replies 200
-// with PAYMENT-RESPONSE carrying the block hash. The unsigned quote may follow
-// redirects (only within the given URL's origin when HEADERS are set); signed requests use the final 402 response URL
-// and never follow redirects.
+// with PAYMENT-RESPONSE carrying the block hash. The unsigned quote follows same-origin redirects for up to 20 hops
+// with the same method, body and headers; any cross-origin redirect is refused with exit 6, even without HEADERS.
+// Signed requests use the final 402 response URL and never follow redirects.
 //
 // One writer per account. A Nano account chain is serial: each send commits to its predecessor, so ten processes paying
 // from one seed at once would sign ten competing blocks against one frontier; one would land and nine would be refused
@@ -251,12 +251,11 @@ function savePayload(file, body) {
   // authorization, cookie and proxy-authorization on a cross-origin hop but carries every other name (an x-api-key, a
   // custom token), and until 0.3.12 the signed request re-attached all of them to the URL that answered 402, so a seller
   // whose quote redirected to another origin handed that origin the caller's credential for the first one (ClawHub's
-  // scanner on 0.3.11, 2026-10-22, rule T09). With HEADERS set the hops are walked here: a redirect within the origin is
-  // followed with the same method, body and headers (up to 20 hops); a redirect to another origin is refused, exit 6,
-  // before any header or any signature is sent there. Without HEADERS the quote follows redirects as before.
+  // scanner on 0.3.11, 2026-10-22, rule T09). Always walk unsigned quote redirects manually: only the original origin
+  // is trusted, regardless of whether HEADERS are set. Within that origin keep the same method, body and headers for up
+  // to 20 hops; refuse a different origin before making any request there or signing anything.
   const quoteOrigin = new URL(url).origin;
   const quote = async () => {
-    if (!Object.keys(extraHeaders).length) return fetch(url, reqInit());
     let current = url;
     for (let hops = 0; hops < 20; hops++) {
       const r = await fetch(current, { ...reqInit(), redirect: 'manual' });
@@ -264,7 +263,7 @@ function savePayload(file, body) {
       if (!location) return r;
       let next; try { next = new URL(location, current); } catch { return r; }
       if (next.origin !== quoteOrigin) {
-        console.error(`refusing: the quote at ${current} redirected (HTTP ${r.status}) to ${next.origin}, another origin, while HEADERS are set; the headers were given for ${quoteOrigin} and are not sent elsewhere. Nothing was sent to ${next.origin} and nothing was signed. To pay there, run the client with that URL and the headers meant for it.`);
+        console.error(`refusing: the unsigned quote at ${current} redirected (HTTP ${r.status}) to ${next.origin}, another origin. Cross-origin redirects are refused even when HEADERS are absent; nothing was sent to ${next.origin} and nothing was signed. To proceed, run the client with the final URL and only the headers intended for that origin.`);
         process.exit(6);
       }
       current = next.href;
