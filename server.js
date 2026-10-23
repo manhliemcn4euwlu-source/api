@@ -995,7 +995,11 @@ async function checkFetchUrl(urlStr) {
 // 2026-09-29 the abort was cleared before r.text(), so a target that sent headers and then cut or stalled the body held
 // the call open, or failed it, with the price kept and no hash named (trollhunters, item 5). A body cut or stalled is now
 // handed back like a target that never answered (e.noAnswer). `bounds` is injectable for tests.
-const FETCH_BOUNDS = { headersMs: Number(process.env.FETCH_TIMEOUT_MS || 15_000), bodyMs: Number(process.env.FETCH_BODY_TIMEOUT_MS || 15_000) };
+// maxBytes caps what is read off the socket, maxChars what is returned: a page past the second bound used to come back cut
+// at 200,000 characters with no field saying so, so a buyer paid for a page and got a prefix that read as the whole document
+// (the same silent-truncation class as /v1/receivable's 100-hash bound, llmrt, 2026-10-23).
+const FETCH_BOUNDS = { headersMs: Number(process.env.FETCH_TIMEOUT_MS || 15_000), bodyMs: Number(process.env.FETCH_BODY_TIMEOUT_MS || 15_000),
+  maxBytes: Number(process.env.FETCH_MAX_BYTES || 2_000_000), maxChars: Number(process.env.FETCH_MAX_CHARS || 200_000) };
 async function fetchText(urlStr, checked, bounds = FETCH_BOUNDS) {
   // The connection goes only to the addresses the check saw: the global fetch resolved the name again on its own, so
   // a rebinding name could pass checkFetchUrl and then connect somewhere private (Ops Control HQ, 2026-09-28). Every
@@ -1046,7 +1050,10 @@ async function fetchText(urlStr, checked, bounds = FETCH_BOUNDS) {
       const err = e instanceof Error ? e : new Error(m);
       err.message = m; err.noAnswer = true; throw err;
     }
-    if (body.length > 2_000_000) body = body.slice(0, 2_000_000);
+    // The read is capped at maxBytes: remember that the target had more, so the answer can say it was cut rather than
+    // presenting a prefix as the page.
+    const readCut = body.length > bounds.maxBytes;
+    if (readCut) body = body.slice(0, bounds.maxBytes);
     if (/html/i.test(ct)) {
       body = body.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<!--[\s\S]*?-->/gi, ' ')
         .replace(/<\/(p|div|h[1-6]|li|tr|br|section|article)>/gi, '\n')
@@ -1055,7 +1062,17 @@ async function fetchText(urlStr, checked, bounds = FETCH_BOUNDS) {
         .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
         .replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
     }
-    return { status: r.status, content_type: ct, url: u.href, text: body.slice(0, 200_000) };
+    const chars = body.length;
+    const text = body.slice(0, bounds.maxChars);
+    const cut = readCut || chars > bounds.maxChars;
+    return { status: r.status, content_type: ct, url: u.href, text,
+      text_chars: text.length, truncated: cut,
+      // A buyer that got a prefix must not read it as the whole page. The bound is this seller's, so the answer names it and
+      // how much was left out (llmrt, 2026-10-23).
+      ...(cut ? { chars_before_cut: chars,
+        next: 'this page is longer than the ' + bounds.maxChars + ' characters this seller returns in one call: text holds the first ' +
+          text.length + (readCut ? ' of the ' + chars + ' characters read (the body was itself cut at ' + bounds.maxBytes + ' bytes)' : ' of ' + chars) +
+          '; the remainder was dropped, not summarised, so fetch the target directly if you need all of it' } : {}) };
   } finally { clearTimeout(t); dispatcher.close().catch(() => {}); }
 }
 

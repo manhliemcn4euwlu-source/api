@@ -59,6 +59,7 @@ test('a lookup failure inside fetchText is flagged for hand-back, and a pre-chec
 const target = http.createServer((req, res) => {
   if (req.url === '/cut') { res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '100' }); res.write('0123456789'); setTimeout(() => res.destroy(), 20); return; }
   if (req.url === '/stall') { res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '100' }); res.write('01234'); return; }   // never finishes
+  if (req.url === '/long') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('x'.repeat(300)); return; }
   res.writeHead(200, { 'content-type': 'text/plain' }); res.end('whole body');
 });
 before(() => new Promise(r => target.listen(0, '127.0.0.1', r)));
@@ -76,6 +77,21 @@ function viaLocal(fn) {
 test('a whole body still comes back through the wrapper', viaLocal(async () => {
   const r = await fetchText('http://target.test/ok');
   assert.equal(r.text, 'whole body'); assert.equal(r.status, 200);
+}));
+
+// A page past the seller's per-call character bound used to come back cut with no field saying so: a buyer paid for a page and
+// read a prefix as the whole document (the /v1/receivable 100-hash class, llmrt, 2026-10-23). The answer now carries the cut.
+test('a body past the character bound says it was cut and how much came back', viaLocal(async () => {
+  const r = await fetchText('http://target.test/long', undefined, { headersMs: 5000, bodyMs: 5000, maxBytes: 1_000_000, maxChars: 100 });
+  assert.equal(r.text.length, 100);
+  assert.equal(r.truncated, true);
+  assert.equal(r.text_chars, 100);
+  assert.equal(r.chars_before_cut, 300);
+  assert.match(r.next, /first 100 of 300/);
+  // A page inside the bound is not marked, so `truncated: false` is a positive statement that text is the whole body.
+  const ok = await fetchText('http://target.test/ok', undefined, { headersMs: 5000, bodyMs: 5000, maxBytes: 1_000_000, maxChars: 100 });
+  assert.equal(ok.truncated, false);
+  assert.equal(ok.text, 'whole body');
 }));
 
 test('a body cut after the headers (content-length 100, ten bytes, socket destroyed) is flagged for hand-back and named', viaLocal(async () => {

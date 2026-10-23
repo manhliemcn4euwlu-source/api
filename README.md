@@ -34,7 +34,7 @@ the credit. Fine at 0.001 NANO per call; not a design for anything larger.
 | GET    | `/v1/stats`           | no   | paid calls so far                             |
 | GET    | `/v1/credit?hash=H`   | no   | remaining credit on a hash. 60 per minute per IP |
 | GET    | `/v1/echo?msg=hi`     | yes  | returns what you sent (test your client)      |
-| GET    | `/v1/fetch?url=U`     | yes  | fetches U, returns the page as plain text     |
+| GET    | `/v1/fetch?url=U`     | yes  | fetches U, returns the page as plain text. The reply carries `text_chars` and `truncated`; a page longer than the 200,000 characters returned in one call sets `truncated: true`, adds `chars_before_cut` and a `next` line naming what was dropped, so a prefix is never read as the whole document (since 2026-10-23) |
 | POST   | `/v1/hash`            | yes  | sha256 of the request body, with server time  |
 | GET    | `/v1/x402`            | no   | x402 payment requirements (scheme exact, nano:mainnet) |
 | GET    | `/.well-known/x402`   | no   | discovery manifest for seller directories (agent402.tools, agent-tools.cloud, nohumans.directory): resources with their x402 requirements, the facilitator, the free routes |
