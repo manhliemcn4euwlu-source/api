@@ -722,7 +722,14 @@ function logReq(req, entry) {
 }
 // Entries whose `hash` or `previous` equals H, newest first, at most `limit`. Reads the whole
 // file; fine at the sizes this log sees. Returns [] if the log does not exist yet.
-function reqLogFor(hash, limit = 20) {
+// At most REQUESTS_MAX entries (default 20, env override), newest first. The answer says when it hit the bound: until
+// 2026-10-23 it was a silent 20, and the route's promise is that a reader can tell whether a hash was used here at all
+// (llmrt, 2026-10-23: 25 /v1/process calls on one previous answered `entries: 20` with no word that five were dropped).
+const REQUESTS_MAX = Number(process.env.REQUESTS_MAX || 20);
+// The most one answer will list even when asked: a log line is small, but the answer is served per request and 20 000
+// entries of one hash is already a 2 MB reply from a file read on the request path.
+const REQUESTS_HARD_MAX = 5000;
+function reqLogFor(hash, limit = REQUESTS_MAX) {
   let lines = [];
   try { lines = fs.readFileSync(REQ_LOG, 'utf8').split('\n').filter(Boolean); } catch { return []; }
   const out = [];
@@ -731,6 +738,18 @@ function reqLogFor(hash, limit = 20) {
     if (e.hash === hash || e.previous === hash) out.push(e);
   }
   return out;
+}
+// How many entries the log holds for this hash in total: the same scan without the cap, so the answer can say whether
+// `entries` is everything. Counted rather than collected, so a hash used thousands of times costs no array.
+function reqLogCount(hash) {
+  let lines = [];
+  try { lines = fs.readFileSync(REQ_LOG, 'utf8').split('\n').filter(Boolean); } catch { return 0; }
+  let n = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let e; try { e = JSON.parse(lines[i]); } catch { continue; }
+    if (e.hash === hash || e.previous === hash) n++;
+  }
+  return n;
 }
 function countCheck(kind, req) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
@@ -1315,8 +1334,22 @@ const server = http.createServer(async (req, res) => {
       if (overFreeLimit(req, checkHits.requests, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
       const h = String(u.searchParams.get('hash') || '').toUpperCase();
       if (!/^[0-9A-F]{64}$/.test(h)) return send(res, 400, { error: 'hash must be 64 hex characters (a block hash, or the frontier work was asked for)' });
-      const entries = reqLogFor(h);
-      return send(res, 200, { hash: h, found: entries.length > 0, entries, note: 'every /v1/work and /v1/process call since 2026-09-16 is logged here by hash; absence means pursekeeper.dev was not used for that block' });
+      // limit: how many entries to list, default REQUESTS_MAX and never more than REQUESTS_HARD_MAX. Until 2026-10-23 the
+      // 20 was a constant with no parameter and no word in the answer, so a caller checking its own history saw 20 of 25
+      // and read that as all (llmrt, 2026-10-23, reproduced against the live service).
+      const want = u.searchParams.get('limit');
+      let limit = REQUESTS_MAX;
+      if (want !== null) {
+        if (!/^\d{1,6}$/.test(want) || Number(want) < 1) return send(res, 400, { error: 'limit must be a positive integer (at most ' + REQUESTS_HARD_MAX + ')' });
+        limit = Math.min(Number(want), REQUESTS_HARD_MAX);
+      }
+      const entries = reqLogFor(h, limit), total = reqLogCount(h);
+      return send(res, 200, { hash: h, found: entries.length > 0, entries, total,
+        // The bound is the answer's own: a reader who needs every entry pages with `limit` (up to the total) rather than
+        // reading the newest 20 as the whole log, which is what this route did until 2026-10-23 (llmrt).
+        truncated: total > entries.length,
+        ...(total > entries.length ? { next: 'this answer lists the newest ' + entries.length + ' of ' + total + ' entries for this hash; pass limit=' + Math.min(total, REQUESTS_HARD_MAX) + ' for all of them' } : {}),
+        note: 'every /v1/work and /v1/process call since 2026-09-16 is logged here by hash; absence means pursekeeper.dev was not used for that block' });
     }
     if (u.pathname === '/v1/credit') {
       if (overFreeLimit(req, checkHits.credit, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
