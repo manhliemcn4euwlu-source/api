@@ -345,8 +345,17 @@ async function creditForUnlocked(hash) {
     if (reason) { noCredit.set(hash, reason); if (credits[hash] !== '0') { credits[hash] = '0'; save(); } return { error: reason }; }
     return { remaining: BigInt(credits[hash]) };
   }
-  const b = await rpc({ action: 'block_info', json_block: 'true', hash });
-  if (b.error) return { error: 'block not found on this node yet; wait a second and retry' };
+  // Same root cause as /v1/verify below: any node error used to read as "this send is not on the chain yet". Here the answer
+  // costs more than a wrong field, because this route is what a payer polls to learn whether the Nano it sent became credit: a
+  // payer told "not found yet" during a node outage may send again, and the second send is a second payment (llmrt, 2026-10-23).
+  // Only the node's own words mean absent; anything else says the credit is unknown right now.
+  let b;
+  try { b = await rpc({ action: 'block_info', json_block: 'true', hash }); }
+  catch (e) { return { error: 'the node could not be reached to look up this hash (' + String((e && e.message) || e) + '); the credit is unknown right now, not zero: retry, do not send again', unknown: true }; }
+  if (b.error) {
+    if (/\bblock not found\b/i.test(String(b.error))) return { error: 'block not found on this node yet; wait a second and retry' };
+    return { error: 'the node could not answer for this hash (' + String(b.error).slice(0, 160) + '); the credit is unknown right now, not zero: retry, do not send again', unknown: true };
+  }
   if (b.confirmed !== 'true') return { error: 'block not confirmed yet; retry shortly' };
   if (b.subtype !== 'send' || b.contents.link_as_account !== ADDRESS)
     return { error: 'not a send to ' + ADDRESS };
@@ -831,8 +840,26 @@ async function verifyBlock(req, res, u) {
   // minimum (uknwplayer, 2026-09-29): since 2026-09-30 ok is false with the reason unless `to` is given or any_to=1 asks
   // only whether H is a confirmed send to anyone. Same shape as the amount rule: never a 400, `found` unchanged.
   const anyTo = u.searchParams.get('any_to') === '1' && !to;
-  const b = await rpc({ action: 'block_info', json_block: 'true', hash });
-  if (b.error) return send(res, 404, { hash, found: false, ok: false, error: 'block not found on this node (not broadcast yet, or wrong hash); retry in a second' });
+  // A thrown transport failure (node down, timeout, DNS) says the same thing as a JSON error below: cannot tell. It used to
+  // escape to the outer 500 handler, which at least carried no found field, but the answer said nothing about the payment;
+  // it is named here in the same words so both shapes of the same outage read alike.
+  let b;
+  try { b = await rpc({ action: 'block_info', json_block: 'true', hash }); }
+  catch (e) { return send(res, 502, { hash, error: 'the node could not be reached for this hash (' + String((e && e.message) || e).slice(0, 160) + '); whether the block is on the chain is unknown, so nothing here says it is absent', note: 'retry; do not rebuild a payment on this answer' }); }
+  // Only the node's own "Block not found" means the block is absent. Any other error (the node down, a proxy page, a
+  // timeout, a refusal) says nothing about whether the block exists, and this route used to answer every one of them as
+  // found:false, the same answer a block that is genuinely not there gets. The skill's no-node.js reads found:false as
+  // "positively not on the chain" and rebuilds a send it then broadcasts, so an outage on this box told a payer whose
+  // send had landed to pay a second time (llmrt, 2026-10-23: the client was fixed for exactly this in c7cf798 on the same
+  // day, the route it calls was not). Now the absence answer is reserved for the node's own not-found, and every other
+  // failure is 502 with no found field at all, so a caller that branches on found cannot read it as absent.
+  if (b.error) {
+    // The node's own words for an absent block are exactly "Block not found"; a loose /not found/ also matched
+    // "Account not found in ledger", which is a syncing node failing to answer, not an absence.
+    if (/\bblock not found\b/i.test(String(b.error)))
+      return send(res, 404, { hash, found: false, ok: false, error: 'block not found on this node (not broadcast yet, or wrong hash); retry in a second' });
+    return send(res, 502, { hash, error: 'the node could not answer for this hash (' + String(b.error).slice(0, 160) + '); whether the block is on the chain is unknown, so nothing here says it is absent', note: 'retry; do not rebuild a payment on this answer' });
+  }
   const amount = BigInt(b.amount || '0');
   const confirmed = b.confirmed === 'true';
   const dest = b.subtype === 'send' ? b.contents.link_as_account : null;
@@ -1428,7 +1455,11 @@ const server = http.createServer(async (req, res) => {
       if (overFreeLimit(req, checkHits.credit, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
       countCheck('credit', req);
       const c = await creditFor(u.searchParams.get('hash') || '');
-      if (c.error) return send(res, 400, { error: c.error });
+      // 400 means the request or the block is wrong; 502 means the node could not be asked and the credit is unknown. The
+      // two used to share 400, so a payer reading only the status could not tell a bad hash from an outage, and the body said
+      // "not found yet" for both (llmrt, 2026-10-23). `unknown: true` marks the second so a client that reads the body can
+      // branch without the status.
+      if (c.error) return send(res, c.unknown ? 502 : 400, { error: c.error, ...(c.unknown ? { unknown: true, note: 'retry; do not send again' } : {}) });
       const body = { remaining_raw: c.remaining.toString(), remaining_nano: nano(c.remaining) };
       // A send past the cap is credited at the cap, and the reply names what was not applied (pursekeeper, 2026-10-22).
       if (c.capped) { body.capped = true; body.amount_raw = c.amount_raw; body.excess_raw = c.excess_raw; }
