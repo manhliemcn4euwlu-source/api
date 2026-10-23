@@ -161,3 +161,59 @@ test('the known-payer list survives a crash: a returning payer must not be treat
   assert.equal(r.recovered, true);
   assert.deepEqual(r.value, ['nano_a', 'nano_b']);
 });
+
+test('an empty ledger with a good .bak loads the .bak, and the next writes keep the recovered credits', () => {
+  // Zero bytes is damage like a truncated tail is, and the same last complete copy is there to load. Read as {} instead,
+  // the server runs on an empty ledger, and its next two writes rotate that empty ledger into .bak: the first write keeps
+  // the .bak (the primary does not parse), the second copies the new, near-empty primary over it.
+  const dir = tmpdir(), f = path.join(dir, 'credits.json');
+  writeJsonAtomic(f, { AB: '1000' });
+  writeJsonAtomic(f, { AB: '1000', CD: '0' });
+  fs.writeFileSync(f, '');   // killed between the truncate and the write
+  const r = readJsonStore(f);
+  assert.equal(r.damaged, true);
+  assert.equal(r.recovered, true, 'the .bak is there: ' + JSON.stringify(r));
+  assert.deepEqual(r.value, { AB: '1000' }, 'the last complete ledger is used, not {}');
+  // the server carries on from what it loaded: two more writes
+  const credits = r.value;
+  credits.EF = '5'; writeJsonAtomic(f, credits);
+  credits.EF = '4'; writeJsonAtomic(f, credits);
+  const again = readJsonStore(f);
+  assert.equal(again.value.AB, '1000', 'the unspent credit survives');
+  assert.equal(JSON.parse(fs.readFileSync(f + '.bak', 'utf8')).AB, '1000', 'and so does the backup');
+});
+
+test('a whitespace-only ledger is damage with the same .bak fallback', () => {
+  const dir = tmpdir(), f = path.join(dir, 'credits.json');
+  writeJsonAtomic(f, { AB: '1' });
+  fs.writeFileSync(f, ' \n\t');
+  const r = readJsonStore(f);
+  assert.equal(r.recovered, true);
+  assert.deepEqual(r.value, { AB: '1' });
+});
+
+test('an empty ledger with no .bak is damage and answers {} as before', () => {
+  const dir = tmpdir(), f = path.join(dir, 'credits.json');
+  fs.writeFileSync(f, '');
+  const r = readJsonStore(f);
+  assert.equal(r.damaged, true); assert.equal(r.recovered, false); assert.equal(r.error, 'empty file');
+  assert.deepEqual(r.value, {});
+});
+
+test('an empty ledger keeps settled x402 hashes: a settled payment stays spent and is never creditable again', () => {
+  // server.js marks a hash spent or settled through x402 as '0' in the same ledger (the facilitator path stores
+  // credits[s.transaction] = '0'), and a hash that is absent from the ledger can be credited again. Read as {}, an
+  // empty primary forgets every '0', and after two writes the .bak that still held them is gone too.
+  const dir = tmpdir(), f = path.join(dir, 'credits.json');
+  const SETTLED = 'A'.repeat(64);
+  writeJsonAtomic(f, { [SETTLED]: '0', AB: '1000' });
+  writeJsonAtomic(f, { [SETTLED]: '0', AB: '1000' });
+  fs.writeFileSync(f, '');
+  const credits = readJsonStore(f).value;
+  assert.equal(credits[SETTLED], '0', 'the settled hash is still known as spent after the empty read');
+  credits.EF = '5'; writeJsonAtomic(f, credits);
+  credits.EF = '4'; writeJsonAtomic(f, credits);
+  const after = readJsonStore(f).value;
+  assert.equal(after[SETTLED], '0', 'still spent after two writes: a re-presented settled block cannot be credited');
+  assert.equal(JSON.parse(fs.readFileSync(f + '.bak', 'utf8'))[SETTLED], '0', 'and the backup still has it');
+});

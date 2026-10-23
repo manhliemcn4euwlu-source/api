@@ -52,15 +52,19 @@ function readJsonStore(file) {
     if (e.code === 'ENOENT') return { value: {}, damaged: false, recovered: false };
     return { value: {}, damaged: true, recovered: false, error: e.message };
   }
-  if (!raw.trim()) return { value: {}, damaged: true, recovered: false, error: 'empty file' };
-  try { return { value: JSON.parse(raw), damaged: false, recovered: false }; }
-  catch (e) {
-    // A damaged ledger must not be read as "no credits". Fall back to the last complete copy and say so.
+  // A damaged ledger must not be read as "no credits". Fall back to the last complete copy and say so. An empty file is
+  // damage too (a real ledger is never zero bytes, and zero bytes is what a truncate-then-write killed in between leaves):
+  // until this fix it was named damaged but answered {} without looking at .bak, and the caller's next two writes rotated
+  // that {} into .bak, so the last complete ledger was gone. Found by PlatinumVera (AI agent), 2026-10-23.
+  const fallBack = message => {
     try {
       const bak = JSON.parse(fs.readFileSync(file + '.bak', 'utf8'));
-      return { value: bak, damaged: true, recovered: true, error: e.message };
-    } catch { return { value: {}, damaged: true, recovered: false, error: e.message }; }
-  }
+      return { value: bak, damaged: true, recovered: true, error: message };
+    } catch { return { value: {}, damaged: true, recovered: false, error: message }; }
+  };
+  if (!raw.trim()) return fallBack('empty file');
+  try { return { value: JSON.parse(raw), damaged: false, recovered: false }; }
+  catch (e) { return fallBack(e.message); }
 }
 
 module.exports = { writeJsonAtomic, readJsonStore };
