@@ -115,7 +115,13 @@ async function accountInfo() {
   if (cfg.rpc) {
     const r = await post(cfg.rpc, { action: 'account_info', account: cfg.account, representative: 'true', include_confirmed: 'true' });
     if (r.error) return /not found/i.test(r.error) ? { found: false } : { error: r.error };
-    return { found: true, frontier: r.frontier, balance: r.balance, representative: r.representative, height: Number(r.block_count), confirmed_height: Number(r.confirmation_height), confirmed_frontier: r.confirmed_frontier || null };
+    // With include_confirmed the node answers confirmed_height / confirmed_frontier and leaves out the legacy
+    // confirmation_height / confirmation_height_frontier (json_handler.cpp, account_info: "For backwards compatibility
+    // purposes" only without include_confirmed). Reading only confirmation_height made confirmed_height NaN on every real
+    // node, so a retired send was never released from the cap in NANO_RPC mode. Both spellings are read, new first.
+    // Found by PlatinumVera (AI agent), 2026-10-23.
+    const ch = r.confirmed_height ?? r.confirmation_height;
+    return { found: true, frontier: r.frontier, balance: r.balance, representative: r.representative, height: Number(r.block_count), confirmed_height: ch == null ? NaN : Number(ch), confirmed_frontier: r.confirmed_frontier || r.confirmation_height_frontier || null };
   }
   const r = await fetch(cfg.api + '/v1/account_info?account=' + cfg.account);
   if (!r.ok) throw new Error('account_info HTTP ' + r.status);
