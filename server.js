@@ -661,7 +661,6 @@ async function workGenerate(req, res) {
   try {
     if (paid) {
       if (!await charge(req, res)) return;
-      workStats.paid = (workStats.paid || 0) + 1;
     } else {
       const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
       const now = Date.now();
@@ -674,6 +673,7 @@ async function workGenerate(req, res) {
     try {
       const knownPayer = !paid && await isKnownPayerFrontier(hash);
       const r = await workFor(hash, { paid, knownPayer });
+      if (paid) workStats.paid = (workStats.paid || 0) + 1;
       logReq(req, { kind: 'work', hash, ok: true, paid, tier: r.tier, source: r.source, ms: r.ms });
       return send(res, 200, { hash, work: r.work, threshold: x402.WORK_THRESHOLD, source: r.source, ms: r.ms, paid, tier: r.tier });
     } catch (e) {
