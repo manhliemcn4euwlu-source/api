@@ -43,6 +43,10 @@ test('60 verify calls from one IP do not block receivable for that IP', async ()
   const after60 = await get('/v1/verify?hash=' + H + '&any=1', ip);
   assert.equal(after60.status, 429, 'the 61st verify call must still be refused');
   assert.match(after60.body.error, /60 checks per minute/);
+  // Since 2026-10-23 the refusal says when to come back: whole seconds until the oldest hit leaves the window, so a client
+  // (scripts/no-node.js receive) waits exactly that long (llmrt on api#103 asked for the header; credited).
+  const ra = Number(after60.headers['retry-after']);
+  assert.ok(Number.isInteger(ra) && ra >= 1 && ra <= 60, 'Retry-After must be 1..60 whole seconds, got ' + JSON.stringify(after60.headers['retry-after']));
   const recv = await get('/v1/receivable?account=' + A, ip);
   assert.equal(recv.status, 200, 'receivable must keep its own allowance: ' + JSON.stringify(recv.body));
   const info = await get('/v1/account_info?account=' + A, ip);

@@ -468,7 +468,7 @@ function paymentRequired(res, hint, req, extra) {
       checks.challenges_402 = (checks.challenges_402 || 0) + 1;
       checks.ips402 = checks.ips402 || {}; checks.ips402[key] = (checks.ips402[key] || 0) + 1;
       checks.since_402 = checks.since_402 || new Date().toISOString();
-      fs.writeFileSync(CHECKS_FILE, JSON.stringify(checks));
+      writeJsonAtomic(CHECKS_FILE, checks);
     } catch {}
   }
   const pr = req ? x402Required(req, hint) : null;
@@ -700,7 +700,11 @@ const checkHits = { verify: new Map(), receivable: new Map(), account_info: new 
 // short hashes, to count distinct callers without keeping addresses.
 const CHECKS_FILE = path.join(__dirname, 'data', 'checks.json');
 let checks = { verify: 0, receivable: 0, ips: {}, since: new Date().toISOString() };
-try { checks = { ...checks, ...JSON.parse(fs.readFileSync(CHECKS_FILE, 'utf8')) }; } catch {}
+// Durable since 2026-10-23 (llmrt on api#95, 2026-10-21; credited): this file holds no Nano, but it is the only record of
+// third-party use of the free routes and of the 402 challenges, and it is what the reviews cite, so it is written through
+// writeJsonAtomic and loaded through readJsonStore like the money files. A truncated file is named here at boot and the
+// last complete copy is loaded from .bak, instead of every counter silently starting again from zero.
+{ const r = readJsonStore(CHECKS_FILE); if (r.damaged) console.error('checks: ' + CHECKS_FILE + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on')); if (r.value && typeof r.value === 'object' && !Array.isArray(r.value)) checks = { ...checks, ...r.value }; }
 // Request log for /v1/work and /v1/process: one JSON line per call, no raw IPs (sha256 prefix
 // like checks.json). Exists so a report that says "I did not use pursekeeper.dev for work or
 // broadcast" can be checked from here, and so a hosted-runtime run can point at its own line.
@@ -730,17 +734,23 @@ function countCheck(kind, req) {
   const key = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 12);
   checks[kind] = (checks[kind] || 0) + 1;
   checks.ips[key] = (checks.ips[key] || 0) + 1;
-  try { fs.writeFileSync(CHECKS_FILE, JSON.stringify(checks)); } catch {}
+  try { writeJsonAtomic(CHECKS_FILE, checks); } catch {}
 }
 function checkStats() {
   return { verify: checks.verify, receivable: checks.receivable, account_info: checks.account_info || 0, process: checks.process || 0, distinct_ips: Object.keys(checks.ips).length, since: checks.since,
     challenges_402: checks.challenges_402 || 0, challenges_402_distinct_callers: Object.keys(checks.ips402 || {}).length, since_402: checks.since_402 || null };
 }
-function overFreeLimit(req, map, limit) {
+function overFreeLimit(req, map, limit, res) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   const now = Date.now();
   const hits = (map.get(ip) || []).filter(t => now - t < 60_000);
-  if (hits.length >= limit) return true;
+  if (hits.length >= limit) {
+    // Retry-After in whole seconds: when the oldest hit in the window ages out, one call is allowed again. A client that
+    // reads it (scripts/no-node.js receive since 2026-10-23) waits that long instead of a fixed guess (llmrt on api#103,
+    // 2026-10-22, the line that asked for the header; credited, Ӿ0).
+    if (res) res.setHeader('Retry-After', String(Math.max(1, Math.ceil((hits[0] + 60_000 - now) / 1000))));
+    return true;
+  }
   hits.push(now); map.set(ip, hits);
   if (map.size > 10_000) map.clear();
   return false;
@@ -762,7 +772,7 @@ function minRawOf(u) {
   return null;   // neither given: /v1/verify requires one (or any=1), /v1/receivable lists everything
 }
 async function verifyBlock(req, res, u) {
-  if (overFreeLimit(req, checkHits.verify, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+  if (overFreeLimit(req, checkHits.verify, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
   countCheck('verify', req);
   const hash = String(u.searchParams.get('hash') || '').toUpperCase();
   if (!/^[0-9A-F]{64}$/.test(hash)) return send(res, 400, { error: 'hash must be 64 hex characters (a block hash)' });
@@ -796,7 +806,7 @@ async function verifyBlock(req, res, u) {
     height: Number(b.height), local_timestamp: Number(b.local_timestamp), checked_at: new Date().toISOString(), node: 'pursekeeper.dev' });
 }
 async function receivable(req, res, u) {
-  if (overFreeLimit(req, checkHits.receivable, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+  if (overFreeLimit(req, checkHits.receivable, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
   countCheck('receivable', req);
   const account = u.searchParams.get('account') || '';
   if (!nanocurrency.checkAddress(account)) return send(res, 400, { error: 'account must be a nano_ address' });
@@ -813,7 +823,7 @@ async function receivable(req, res, u) {
 // (frontier, balance, representative, confirmation height) and process (broadcast a signed
 // state block). Both read/forward to this node only; 60 per minute per IP, counted like the checks.
 async function accountInfo(req, res, u) {
-  if (overFreeLimit(req, checkHits.account_info, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+  if (overFreeLimit(req, checkHits.account_info, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
   countCheck('account_info', req);
   const account = u.searchParams.get('account') || '';
   if (!nanocurrency.checkAddress(account)) return send(res, 400, { error: 'account must be a nano_ address' });
@@ -837,7 +847,7 @@ function shapeAccountInfo(r) {
     confirmation_height: height !== null && /^\d+$/.test(height) ? Number(height) : null };
 }
 async function processBlock(req, res) {
-  if (overFreeLimit(req, checkHits.process, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+  if (overFreeLimit(req, checkHits.process, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
   countCheck('process', req);
   let body;
   try { body = JSON.parse((await readBody(req, 20_000)).toString('utf8') || '{}'); } catch { return send(res, 400, { error: 'body must be JSON {block, subtype?}' }); }
@@ -1132,8 +1142,9 @@ x402
   target, whatever its status, is billable), when the price
   goes on the block's hash as X-Nano-Payment credit and the
   400 or 502 body names the full hash to retry with. Work is optional here: the requirements carry
-  extra.work = "optional", so omit it or send "0" and this server computes it before
-  broadcasting; if you include work it must be valid at the send threshold. Other
+  extra.work = "optional", so send work "0" (the advertised form; omitting the field
+  is accepted too) and this server computes it before broadcasting; if you include
+  real work it must be valid at the send threshold. Other
   sellers may require it: check their extra.work before generating. Requirements:
   GET /v1/x402. Work, if you want your own: POST /v1/work.
 
@@ -1162,7 +1173,11 @@ Endpoints
                                 ?hash=H&any=1&any_to=1      any confirmed send to anyone
                               min_raw is at most 2^128-1 (340282366920938463463374607431768211455),
                               min_nano likewise; above that the answer is 400 (since 2026-10-01)
-                              (free, 60/min per IP; for sellers who take Nano and have no node)
+                              (free, 60/min per IP; for sellers who take Nano and have no node).
+                              Stateless: it answers ok for the same hash forever, and a block hash
+                              is public on the chain, so keep your own list of hashes already
+                              delivered for and refuse a repeat. Every free route's 429 carries
+                              Retry-After in seconds.
   GET  /v1/receivable?account=A&min_raw=N
                               confirmed, unpocketed sends to A with amounts and senders (free, 60/min);
                               min_raw (or min_nano) is at most 2^128-1, else 400 (since 2026-10-01)
@@ -1276,7 +1291,7 @@ const server = http.createServer(async (req, res) => {
       ],
       request_header: 'PAYMENT-SIGNATURE (X-PAYMENT also accepted): base64 JSON {x402Version:2, accepted, payload:{block}}',
       response_header: 'PAYMENT-RESPONSE: base64 JSON {success, transaction, network, payer}',
-      block_rules: 'state block from your current confirmed frontier; balance = current balance - amount exactly; link = payTo; work optional (extra.workOptional = true, also written extra.work = "optional", refers to the work field of the payment block itself, on every route including /v1/work, whose product is work for the hash you name in the body): omit it or send "0" and this seller computes it before broadcasting; if you send work it must be valid at ' + x402.WORK_THRESHOLD + ' against previous; extra.workThreshold names that threshold',
+      block_rules: 'state block from your current confirmed frontier; balance = current balance - amount exactly; link = payTo; work optional (extra.workOptional = true, also written extra.work = "optional", refers to the work field of the payment block itself, on every route including /v1/work, whose product is work for the hash you name in the body): send work "0" (the advertised form; omitting the field is accepted too) and this seller computes it before broadcasting; if you send real work it must be valid at ' + x402.WORK_THRESHOLD + ' against previous; extra.workThreshold names that threshold',
       work: 'POST /v1/work {"hash": "<frontier>"}: 6 per minute per IP free (GPU, about a second, within a shared budget of ' + FREE_GPU_PER_MIN + ' a minute; CPU after that), or pay ' + nano(PRICE_RAW) + ' NANO per work (same headers) with no per-minute limit, at most four proofs generated at once and a fifth call answering 503 with nothing charged, a workless x402 block arriving while four are in flight refused with a 402 that asks for work attached, nothing broadcast; for sends to anyone else', example: '/examples/client-x402.js', spec: 'https://github.com/x402nano/schemes',
       work_sources: workSources() });
     if (u.pathname === '/v1/work' && req.method === 'POST') return workGenerate(req, res);
@@ -1285,7 +1300,7 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/v1/account_info') return accountInfo(req, res, u);
     if (u.pathname === '/v1/process' && req.method === 'POST') return processBlock(req, res);
     if (u.pathname === '/v1/requests' && req.method === 'GET') {
-      if (overFreeLimit(req, checkHits.requests, 60)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
+      if (overFreeLimit(req, checkHits.requests, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
       const h = String(u.searchParams.get('hash') || '').toUpperCase();
       if (!/^[0-9A-F]{64}$/.test(h)) return send(res, 400, { error: 'hash must be 64 hex characters (a block hash, or the frontier work was asked for)' });
       const entries = reqLogFor(h);

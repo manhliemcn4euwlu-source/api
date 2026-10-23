@@ -16,7 +16,24 @@ const N = require('nanocurrency');
 const API = (process.env.API || 'https://pursekeeper.dev').replace(/\/$/, '');
 const REP = process.env.NANO_REP || 'nano_3arg3asgtigae3xckabaaewkx3bzsh7nwz7jkmjos79ihyaxwphhm6qgjps4';
 const RAW = 10n ** 30n;
-const get = p => fetch(API + p).then(r => r.json());
+// GET through the API. A 429 (60 per minute per IP on every free route; the server's Retry-After says how long) is
+// waited out and retried, so a receive of many pending sends runs to the end instead of dying when a minute's
+// allowance is spent (llmrt, api#103, 2026-10-22: a receive died at the 30th send while the routes shared one bucket).
+// Any other answer that carries JSON is handed back for the caller to read (.error, found:false, found:true); an answer
+// with no JSON body (a proxy's error page, a 5xx with HTML) is a transport failure and is named as one, status included.
+async function get(p) {
+  for (let i = 0; ; i++) {
+    const r = await fetch(API + p);
+    if (r.status === 429 && i < 30) {
+      const wait = Math.min(60, Math.max(1, Number(r.headers.get('retry-after')) || 20));
+      console.error('rate limited on ' + p.split('?')[0] + ' (' + (i + 1) + '); waiting ' + wait + ' s');
+      await new Promise(s => setTimeout(s, wait * 1000));
+      continue;
+    }
+    try { return await r.json(); }
+    catch { throw new Error('HTTP ' + r.status + ' from ' + p.split('?')[0] + ' with no JSON body'); }
+  }
+}
 const post = (p, body) => fetch(API + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
 const toRaw = s => { const m = /^(\d+)(?:\.(\d{1,30}))?$/.exec(s); if (!m) throw new Error('amount must be a decimal XNO amount'); return BigInt(m[1]) * RAW + BigInt((m[2] || '').padEnd(30, '0')); };
 const fmt = r => { r = BigInt(r); const w = r / RAW, f = (r % RAW).toString().padStart(30, '0').replace(/0+$/, ''); return w + (f ? '.' + f : ''); };
@@ -138,14 +155,17 @@ async function broadcast(block, subtype) {
     if (!pend.blocks.length) return console.error('nothing to receive');
     if (pend.blocks.length > 6) console.error(pend.blocks.length + ' pending sends need ' + pend.blocks.length + ' work calls; about ' + Math.ceil(pend.blocks.length / 6) + ' min at the free rate of 6/min (pay per work to skip the wait)');
     for (const b of pend.blocks) {
-      // Skip a send that a concurrent receive already pocketed (seen after a retry).
+      // Skip a send that a concurrent receive already pocketed (seen after a retry). Only a positive "no longer listed"
+      // skips it: a re-read that fails (an error body, no blocks array) is said on stderr and the send is still tried,
+      // since the node refuses a receive whose source is already pocketed and publish() handles that answer.
       const still = await get('/v1/receivable?account=' + account);
-      if (!still.blocks.some(x => x.hash === b.hash)) { console.error('already received ' + b.hash.slice(0, 8) + ', skipping'); continue; }
+      if (!Array.isArray(still.blocks)) console.error('could not re-read receivable (' + (still.error || 'no blocks field') + '); trying ' + b.hash.slice(0, 8) + ' anyway');
+      else if (!still.blocks.some(x => x.hash === b.hash)) { console.error('already received ' + b.hash.slice(0, 8) + ', skipping'); continue; }
       let kind;
       const hash = await publish(
         () => ({ type: 'state', account, previous, representative: rep, balance: (balance + BigInt(b.amount_raw)).toString(), link: b.hash, work: null }),
         blk => (kind = blk.previous === '0'.repeat(64) ? 'open' : 'receive'),
-        async () => (await get('/v1/receivable?account=' + account)).blocks.some(x => x.hash === b.hash));
+        async () => { const s = await get('/v1/receivable?account=' + account); return !Array.isArray(s.blocks) || s.blocks.some(x => x.hash === b.hash); });
       if (!hash) { console.error('already received ' + b.hash.slice(0, 8) + ' during the retry, skipping'); continue; }
       console.log(kind + ' ' + fmt(b.amount_raw) + ' from ' + b.from + ' -> ' + hash);
     }
