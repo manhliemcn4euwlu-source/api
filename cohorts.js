@@ -300,7 +300,7 @@ function mergePassThrough(rows, via) {
     const w = byAddress.get(wallet);
     if (!w || dropped.has(wallet) || wallet === funder) continue;
     let f = byAddress.get(funder);
-    if (!f) { f = { ...w, address: funder, via_wallets: [] }; byAddress.set(funder, f); added.push(f); }
+    if (!f) { f = { ...w, address: funder, via_wallets: [wallet] }; byAddress.set(funder, f); added.push(f); }   // the first folded wallet is named too (fix-up on PR #105)
     else {
       f.paid_raw = (BigInt(f.paid_raw) + BigInt(w.paid_raw)).toString();
       f.received_raw = (BigInt(f.received_raw) + BigInt(w.received_raw)).toString();
