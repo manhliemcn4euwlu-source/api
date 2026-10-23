@@ -131,7 +131,9 @@ payment-verification path for `X-Nano-Payment` adds no dependencies of its own. 
 PORT=3000 NANO_RPC=http://127.0.0.1:7076 NOT_BEFORE=$(date +%s) node server.js
 ```
 
-Credits are stored in `data/credits.json`. Put it behind any HTTPS proxy.
+Credits are stored in `data/credits.json` and the replies kept for a re-presented payment in `data/served.json` (ten
+minutes, dropped at boot once past); both are written through `creditstore.js` (temp + fsync + rename, previous copy kept
+as `.bak`), so a killed process cannot leave one truncated. Put the directory behind any HTTPS proxy.
 
 ## Contact
 

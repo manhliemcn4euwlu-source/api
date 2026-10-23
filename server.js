@@ -1128,7 +1128,12 @@ function readBody(req, limit = 1_000_000) {
 // URL and body and gets the same reply back, marked x-nano-replay: true, instead of "already used" and no way to get what it
 // paid for (uknwplayer, 2026-09-29). A re-presentation for another route or body is not a lost reply and is refused as before;
 // a hash with credit left buys a new call as before. The facilitator's /settle answers its own replays with the settled hash
-// and time (facilitator.js) and is not cached here. Kept in memory only: a restart forgets, and the refusal stands.
+// and time (facilitator.js) and is not cached here. Kept on disk since 2026-10-23 (data/served.json, read at boot, written
+// through the atomic store): until then the cache was a Map in the process, and its own comment said so. A restart inside the
+// ten minutes, and the service restarts on every deploy and every node restart, turned a reply lost in transit into a
+// permanent loss for the buyer: the block is already in credits.json at zero, verify answers "already used", and the reply
+// the payment bought is gone with the process that held it (llmrt, 2026-10-23). The ten minutes are now the ten minutes
+// across a restart as within one, and an entry past them is dropped at boot and never replayed.
 // Binding (PlatinumVera, 2026-10-03, from the source): the hash above is public data, since the block is on the chain from
 // the broadcast and a payload wrapping it can be rebuilt by anyone, so an x402 reply bought by a payload that echoed the
 // extra.session of the 402 it paid (x402Required) is replayed only to a payload echoing the same session. A payment that
@@ -1140,13 +1145,34 @@ function readBody(req, limit = 1_000_000) {
 // the same call, as the credit itself goes to whoever presents the hash first; that path is bearer by design and documented
 // as such. An x402 reply is never handed to a bearer presentation, nor a bearer reply to an x402 one.
 const REPLAY_TTL_MS = 10 * 60_000;
+const SERVED_FILE = process.env.SERVED_FILE || (process.env.NODE_TEST_CONTEXT ? null : path.join(__dirname, 'data', 'served.json'));
 const served = new Map();   // hash -> { key, code, body, type, headers, at, bind: { secret } | { bearer: true } }
+// Loaded before the first request: a reply this process did not serve itself is still a reply it promised to give again.
+// Entries past the ten minutes are dropped here rather than at the first re-presentation, so a long-lived file cannot grow
+// into an archive of everything ever sold. A damaged file is named at boot and read as empty: the money is in credits.json,
+// this file only holds the answers to payments already recorded there.
+if (SERVED_FILE) {
+  const r = readJsonStore(SERVED_FILE);
+  if (r.damaged) console.error('served: ' + SERVED_FILE + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
+  const now = Date.now();
+  for (const [h, s] of Object.entries(r.value && typeof r.value === 'object' && !Array.isArray(r.value) ? r.value : {})) {
+    if (!/^[0-9A-F]{64}$/i.test(h) || !s || typeof s !== 'object') continue;
+    if (typeof s.key !== 'string' || typeof s.body !== 'string' || typeof s.at !== 'number') continue;
+    if (now - s.at > REPLAY_TTL_MS) continue;
+    served.set(h.toUpperCase(), { key: s.key, code: s.code, body: s.body, type: s.type || 'application/json', headers: s.headers || {}, at: s.at, bind: s.bind && typeof s.bind === 'object' ? s.bind : {} });
+  }
+}
+function saveServed() {
+  if (!SERVED_FILE) return;
+  try { writeJsonAtomic(SERVED_FILE, Object.fromEntries(served)); } catch {}
+}
 function replayKey(req) { return req.method + ' ' + req.url + ' ' + crypto.createHash('sha256').update(req.bodyBuffer || '').digest('hex'); }
 function rememberServed(hash, key, code, body, type, headers, bind) {
   const now = Date.now();
   for (const [h, s] of served) if (now - s.at > REPLAY_TTL_MS) served.delete(h);
   if (served.size > 5_000) served.clear();
   served.set(hash, { key, code, body, type, headers, at: now, bind: bind || {} });
+  saveServed();
 }
 function replayIfServed(req, res, hash, bind) {
   const s = served.get(String(hash || '').toUpperCase());
@@ -1189,7 +1215,8 @@ x402
   the broadcast; the token is what binds the re-presentation to the payer, so nobody else can be
   served on it, and a block waiting for its token is not X-Nano-Payment credit for anyone either;
   a re-presentation that arrives while the block is still unconfirmed gets the same 402 and the
-  same token again. A reply served for a payment is kept for ten minutes: re-present the same
+  same token again. A reply served for a payment is kept for ten minutes, on disk, so a restart in
+  between does not lose it: re-present the same
   PAYMENT-SIGNATURE for the same method, URL and body and the same reply comes back with
   X-Nano-Replay: true (a reply given again, never a refusal, to the payer). The block is public
   and anyone could wrap it, so when the payment echoed the extra.session of the 402 it paid
