@@ -250,6 +250,8 @@ async function settleLocked(body, deps) {
         landed: async h => { try { const b = await blockInfo(h); if (b && b.error) return /not found/i.test(b.error) ? false : null; return b && b.contents ? true : null; } catch { return null; } } });
       if (!s.success) return { success: false, errorReason: codeFor(s.errorReason) === 'invalid_payment' ? 'process_failed' : codeFor(s.errorReason), detail: s.errorReason, transaction: '', network, payer: v.payer };
       rememberBroadcast(s.transaction, v.payer, req);
+      // pursekeeper.dev's /v1/requests answers "was H broadcast through this server?"; a facilitator broadcast is one.
+      if (deps.logReq) { try { deps.logReq({ kind: 'facilitator_settle', hash: up(s.transaction), previous: up(v._block && v._block.previous || '') || null, account: v.payer, ok: true }); } catch {} }
     }
     // Confirmed step: half a second, then one-second polls up to maxTimeoutSeconds (capped).
     const sleep = deps.sleep || (ms => new Promise(r => setTimeout(r, ms)));

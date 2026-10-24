@@ -662,6 +662,10 @@ async function chargeX402Locked(req, res, payload, key) {
     else s = await x402.settle(v.block, v.payer, { hash: v.hash, process: block => rpc({ action: 'process', json_block: 'true', subtype: 'send', block }),
       landed: async h => { try { const b = await rpc({ action: 'block_info', json_block: 'true', hash: h }); if (b && b.error) return /not found/i.test(b.error) ? false : null; return b && b.contents ? true : null; } catch { return null; } } });
     if (!s.success) return paymentRequired(res, 'x402: ' + s.errorReason, req), false;
+    // The block was broadcast through this server (and its work computed here when work_by is 'seller'): /v1/requests says
+    // "absence means pursekeeper.dev was not used for that block", so the request log has to hold it. Until 2026-10-23 only
+    // /v1/work and /v1/process wrote it, and a block this server broadcast as an x402 payment answered found:false.
+    if (!v.alreadyLanded) logReq(req, { kind: 'x402', hash: String(s.transaction).toUpperCase(), previous: String(v.block && v.block.previous || '').toUpperCase() || null, account: v.payer, ok: true, work_by: v.workBy || 'client', resource: req.url.split('?')[0] });
     if (!v.alreadyLanded && !await confirmedWithin(s.transaction)) {
       const token = crypto.randomBytes(16).toString('hex');
       represent[s.transaction] = { token, at: Date.now() }; saveRepresent();
@@ -1407,7 +1411,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return send(res, 204, '');
     if (await site.handle(req, res, u, send)) return;
     if (await cohorts.handle(req, res, u, send)) return;
-    if (await facilitator.handle(req, res, u, send, { rpc, settling })) return;
+    if (await facilitator.handle(req, res, u, send, { rpc, settling, logReq: entry => logReq(req, entry) })) return;
     if (u.pathname === '/' || u.pathname === '/api') return send(res, 200, DOCS, 'text/plain');
     if (u.pathname.startsWith('/examples/')) {
       const root = path.join(__dirname, 'examples');
@@ -1495,7 +1499,7 @@ const server = http.createServer(async (req, res) => {
         // reading the newest 20 as the whole log, which is what this route did until 2026-10-23 (llmrt).
         truncated: total > entries.length,
         ...(total > entries.length ? { next: 'this answer lists the newest ' + entries.length + ' of ' + total + ' entries for this hash; pass limit=' + Math.min(total, REQUESTS_HARD_MAX) + ' for all of them' } : {}),
-        note: 'every /v1/work and /v1/process call since 2026-09-16 is logged here by hash; absence means pursekeeper.dev was not used for that block' });
+        note: 'every /v1/work and /v1/process call since 2026-09-16, and every block broadcast here for an x402 payment (paid routes and the facilitator) since 2026-10-23, is logged here by hash; absence means pursekeeper.dev was not used for that block' });
     }
     if (u.pathname === '/v1/credit') {
       if (overFreeLimit(req, checkHits.credit, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
