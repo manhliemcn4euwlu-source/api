@@ -293,3 +293,110 @@ test('a handed-back x402 call is not counted as an x402 call either: /v1/stats k
   assert.equal(after.body.calls_x402, x4020, 'nothing was served over x402: that count is back too');
   assert.ok(after.body.calls_x402 <= after.body.calls_paid, 'no more x402 calls than paid calls');
 }));
+
+test('re-presenting PAYMENT-SIGNATURE after a handed-back x402 call requires the X-Nano-Represent token, while GET /v1/credit on an untouched block does not poison PAYMENT-SIGNATURE', viaLocal(async () => {
+  await loadPurposes();
+  Object.assign(X402_CONFIRM, { intervalMs: 1, boundMs: 200 });
+  const sk = N.deriveSecretKey(await N.generateSeed(), 0);
+  const payer = N.deriveAddress(N.derivePublicKey(sk), { useNanoPrefix: true });
+  const { block } = N.createBlock(sk, { work: WORK, previous: FRONTIER, representative: payer, balance: (BALANCE - AMOUNT).toString(), link: PAY_TO });
+  block.account = block.account.replace(/^xrb_/, 'nano_');
+  const hash = x402.blockHash(block);
+  const header = encodePaymentSignatureHeader({ x402Version: 2, accepted: REQ, payload: { block } });
+  const chain = new Map();
+  let processCalls = 0;
+  globalThis.fetch = async (url, opts) => {
+    const b = JSON.parse(opts.body); let a;
+    if (b.action === 'account_info') {
+      const landed = chain.has(hash);
+      const curFrontier = landed ? hash : FRONTIER;
+      const curBal = landed ? (BALANCE - AMOUNT).toString() : BALANCE.toString();
+      a = { frontier: curFrontier, confirmed_frontier: curFrontier, balance: curBal, representative: payer, block_count: landed ? '2' : '1' };
+    } else if (b.action === 'process') {
+      processCalls++; chain.set(hash, b.block); a = { hash };
+    } else if (b.action === 'block_info') {
+      a = chain.has(b.hash)
+        ? { block_account: payer, subtype: 'send', amount: AMOUNT.toString(), confirmed: 'true', height: '2', local_timestamp: '1758000000', contents: { ...chain.get(b.hash), link_as_account: PAY_TO } }
+        : { error: 'Block not found' };
+    } else if (b.action === 'account_history') {
+      a = { history: [{ hash, type: 'send', account: PAY_TO, local_timestamp: '1758000000' }] };
+    } else a = { error: 'unexpected rpc ' + b.action };
+    return { ok: true, json: async () => a };
+  };
+
+  // 1) First attempt on /v1/fetch cuts mid-body and hands the call back (502, credits[hash] = AMOUNT, bound to token).
+  const r1 = response();
+  await server.listeners('request')[0]({ url: '/v1/fetch?url=http://target.test/cut', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'payment-signature': header }, socket: { remoteAddress: '127.0.0.1' } }, r1);
+  assert.equal(r1.status, 502);
+  assert.equal(credits[hash], AMOUNT.toString());
+  assert.equal(processCalls, 1);
+  const token = r1.headers['x-nano-represent'];
+  assert.match(String(token), /^[0-9a-f]{32}$/);
+
+  const statsAfterHandback = response();
+  await server.listeners('request')[0]({ url: '/v1/stats', method: 'GET', headers: { host: 'pursekeeper.dev' }, socket: { remoteAddress: '127.0.0.1' } }, statsAfterHandback);
+  const settledAfterHandback = statsAfterHandback.body.x402_settled;
+
+  // 2a) Without the hand-back token (or with a wrong token), re-presenting PAYMENT-SIGNATURE is refused as already used.
+  const rNoTok = response();
+  await server.listeners('request')[0]({ url: '/v1/fetch?url=http://target.test/ok', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'payment-signature': header }, socket: { remoteAddress: '198.51.100.7' } }, rNoTok);
+  assert.equal(rNoTok.status, 402);
+  assert.match(rNoTok.body.error, /already used/);
+  assert.equal(credits[hash], AMOUNT.toString(), 'stranger without token cannot spend handed-back credit over x402');
+
+  const rWrongTok = response();
+  await server.listeners('request')[0]({ url: '/v1/fetch?url=http://target.test/ok', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'payment-signature': header, 'x-nano-represent': '0'.repeat(32) }, socket: { remoteAddress: '198.51.100.7' } }, rWrongTok);
+  assert.equal(rWrongTok.status, 402);
+  assert.match(rWrongTok.body.error, /already used/);
+  assert.equal(credits[hash], AMOUNT.toString(), 'wrong token cannot spend handed-back credit over x402');
+
+  // 2b) Payer re-presents the unchanged PAYMENT-SIGNATURE with the X-Nano-Represent token from the 502 hand-back.
+  const r2 = response();
+  await server.listeners('request')[0]({ url: '/v1/fetch?url=http://target.test/ok', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'payment-signature': header, 'x-nano-represent': token }, socket: { remoteAddress: '127.0.0.1' } }, r2);
+  assert.equal(r2.status, 200, JSON.stringify(r2.body));
+  assert.equal(r2.body.text, 'whole body');
+  assert.equal(credits[hash], '0', 'restored credit is now spent');
+  assert.equal(processCalls, 1, 'alreadyLanded path does not broadcast a second time');
+
+  const statsAfterServe = response();
+  await server.listeners('request')[0]({ url: '/v1/stats', method: 'GET', headers: { host: 'pursekeeper.dev' }, socket: { remoteAddress: '127.0.0.1' } }, statsAfterServe);
+  assert.equal(statsAfterServe.body.x402_settled, settledAfterHandback, 're-spending handed-back x402 block does not duplicate x402Log entry');
+
+  // 3) Once spent (credits[hash] === '0'), a third presentation for another route is refused even with the token.
+  const r3 = response();
+  await server.listeners('request')[0]({ url: '/v1/echo?msg=third', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'payment-signature': header, 'x-nano-represent': token }, socket: { remoteAddress: '127.0.0.1' } }, r3);
+  assert.equal(r3.status, 402);
+  assert.match(r3.body.error, /already used/);
+
+  // 4) Path 2: A read-only GET /v1/credit?hash=H on an unspent confirmed 0.001 NANO block (no hand-back record) must not poison PAYMENT-SIGNATURE.
+  const sk2 = N.deriveSecretKey(await N.generateSeed(), 0);
+  const payer2 = N.deriveAddress(N.derivePublicKey(sk2), { useNanoPrefix: true });
+  const { block: block2 } = N.createBlock(sk2, { work: WORK, previous: FRONTIER, representative: payer2, balance: (BALANCE - AMOUNT).toString(), link: PAY_TO });
+  block2.account = block2.account.replace(/^xrb_/, 'nano_');
+  const hash2 = x402.blockHash(block2);
+  const header2 = encodePaymentSignatureHeader({ x402Version: 2, accepted: REQ, payload: { block: block2 } });
+  chain.set(hash2, block2);
+  globalThis.fetch = async (url, opts) => {
+    const b = JSON.parse(opts.body);
+    if (b.action === 'account_info') return { ok: true, json: async () => ({ frontier: hash2, confirmed_frontier: hash2, balance: (BALANCE - AMOUNT).toString(), representative: payer2, block_count: '2' }) };
+    if (b.action === 'block_info' && b.hash === hash2) return { ok: true, json: async () => ({ block_account: payer2, subtype: 'send', amount: AMOUNT.toString(), confirmed: 'true', height: '2', local_timestamp: '1758000000', contents: { ...block2, link_as_account: PAY_TO } }) };
+    if (b.action === 'account_history') return { ok: true, json: async () => ({ history: [{ hash: hash2, type: 'send', account: PAY_TO, local_timestamp: '1758000000' }] }) };
+    return { ok: true, json: async () => ({ error: 'unexpected rpc ' + b.action }) };
+  };
+  const credRes = response();
+  await server.listeners('request')[0]({ url: '/v1/credit?hash=' + hash2, method: 'GET', headers: { host: 'pursekeeper.dev' }, socket: { remoteAddress: '127.0.0.1' } }, credRes);
+  assert.equal(credRes.status, 200);
+  assert.equal(credRes.body.remaining_raw, AMOUNT.toString());
+
+  const echoRes = response();
+  await server.listeners('request')[0]({ url: '/v1/echo?msg=after-credit-read', method: 'GET',
+    headers: { host: 'pursekeeper.dev', 'payment-signature': header2 }, socket: { remoteAddress: '127.0.0.1' } }, echoRes);
+  assert.equal(echoRes.status, 200, JSON.stringify(echoRes.body));
+  assert.equal(echoRes.body.echo, 'after-credit-read');
+  assert.equal(credits[hash2], '0');
+}));
