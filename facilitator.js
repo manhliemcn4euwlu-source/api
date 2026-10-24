@@ -52,6 +52,10 @@ function saveStats() { try { fs.mkdirSync(path.dirname(STATS_FILE), { recursive:
 // the SDK's facilitator client parse (typescript/packages/core/src/types/facilitator.ts, httpFacilitatorClient.ts; upstream
 // #1030), and as `detail` until 0.3.0 for callers that read that name. Codes are the contract; the text is free and may change.
 const CODES = [
+  // First, anchored: a failed schema parse names the failing field since 2026-10-18 ("... schema (accepted.network: Required)"),
+  // and that path must not be read by the patterns below (network -> requirements_mismatch, payTo -> invalid_payto). Check 2
+  // of the documented table: any schema failure is invalid_block, whichever field it names.
+  [/^payload does not match x402 v2 PaymentPayload schema/, 'invalid_block'],
   [/awaiting confirmation/i, 'block_awaiting_confirmation'],   // a block the chain holds, matching payTo and amount, not yet confirmed (x402#3432 check 10, 2026-10-16)
   [/already|already used|block_already/i, 'block_already_exists'],
   [/not the account frontier/i, 'frontier_moved'],
