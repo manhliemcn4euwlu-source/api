@@ -562,6 +562,26 @@ function saveRepresent() {
   if (spent) save();
   try { writeJsonAtomic(REPRESENT, represent); } catch {}
 }
+// Hand-backs on an x402 payment. The price of a call that was charged and then not served goes back on the paying hash as
+// X-Nano-Payment credit; for a bearer hash that is the payer's own credential, but for an x402 payment the hash is the block
+// this server broadcast, public on the chain from the broadcast. Restored as plain bearer credit, anyone who read the block
+// off the chain (GET /v1/credit answers remaining_raw for any hash, so a hand-back is visible) could spend it before the payer
+// retried: the takeover the X-Nano-Represent token closes for a broadcast-but-unconfirmed block (api#81). The restored credit
+// is bound the same way: the 400/502 that hands it back carries a token, and the credit is spent only with that token.
+const HANDBACK = path.join(__dirname, 'data', 'handback.json');
+let handback = {};   // hash -> { token, at }
+{ const r = readJsonStore(HANDBACK); if (r.damaged) console.error('handback: ' + HANDBACK + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on')); if (r.value && typeof r.value === 'object') handback = r.value; }
+const saveHandback = () => { try { writeJsonAtomic(HANDBACK, handback); } catch {} };
+// Restore the price on hash h under its lock; for an x402 charge, bind the credit to a token. Returns { left, token }.
+async function handBack(h, res) {
+  return withHashLock(h, async () => {
+    credits[h] = (BigInt(credits[h] || '0') + PRICE_RAW).toString(); save(); unpay(res.chargeRail);
+    let token = handback[h] ? handback[h].token : null;
+    if (res.chargeRail === 'x402') { if (!token) { token = crypto.randomBytes(16).toString('hex'); handback[h] = { token, at: Date.now() }; saveHandback(); } }
+    if (token) res.setHeader('x-nano-represent', token);
+    return { left: credits[h], token };
+  });
+}
 async function confirmedWithin(hash) {
   const deadline = Date.now() + X402_CONFIRM.boundMs;
   for (;;) {
@@ -693,8 +713,8 @@ async function workGenerate(req, res) {
       let note = '';
       const h = String(req.headers['x-nano-payment'] || res.getHeader('x-nano-payment-hash') || '').toUpperCase();
       if (paid && h && h in credits) {
-        const left = await withHashLock(h, async () => { credits[h] = (BigInt(credits[h] || '0') + PRICE_RAW).toString(); save(); unpay(res.chargeRail); return credits[h]; });
-        res.setHeader('x-nano-credit-remaining-raw', left); note = '; the ' + nano(PRICE_RAW) + ' NANO for this call was handed back as credit on ' + h + ', retry with X-Nano-Payment: ' + h;
+        const { left, token } = await handBack(h, res);
+        res.setHeader('x-nano-credit-remaining-raw', left); note = '; the ' + nano(PRICE_RAW) + ' NANO for this call was handed back as credit on ' + h + ', retry with X-Nano-Payment: ' + h + (token ? ' and X-Nano-Represent: ' + token + ' (the block is public on the chain; the token binds the credit to you)' : '');
       }
       return send(res, 502, { error: 'work_generate: ' + e.message + note });
     }
@@ -956,6 +976,9 @@ async function charge(req, res) {
   return withHashLock(String(hash).toUpperCase(), async () => {
     const c = await creditForUnlocked(hash);
     if (c.error) return paymentRequired(res, c.error, req), false;
+    const hb = handback[String(hash).toUpperCase()];
+    if (hb && String(req.headers['x-nano-represent'] || '').trim() !== hb.token)
+      return paymentRequired(res, 'the credit on this hash was handed back for an x402 payment and is spendable only with the X-Nano-Represent token from the reply that handed it back', req), false;
     if (c.remaining < PRICE_RAW) {
       if (replayIfServed(req, res, hash, { bearer: true })) return false;   // nothing left on the hash and the same call again: the reply it bought
       return paymentRequired(res, 'credit on this hash is used up', req), false;
@@ -1493,12 +1516,9 @@ const server = http.createServer(async (req, res) => {
           // The hand-back runs under the same per-hash lock as charge(): written outside it, the restored credit could land
           // between another request's balance read and its debit write on the same hash and be overwritten, losing the
           // handed-back call (Ops Control HQ, 2026-09-27 17:28 UTC, from the source of the 16:41 UTC version).
-          const left = await withHashLock(h, async () => {
-            credits[h] = (BigInt(credits[h] || '0') + PRICE_RAW).toString(); save(); unpay(res.chargeRail);
-            return credits[h];
-          });
+          const { left, token } = await handBack(h, res);
           res.setHeader('x-nano-credit-remaining-raw', left);
-          note = why + '; the call was handed back: the price is back on hash ' + h + ' as X-Nano-Payment credit (' + nano(left) + ' NANO remaining), so retry with X-Nano-Payment: ' + h + (req.headers['x-nano-payment'] ? '' : '; the x402 payment block itself is on the chain and is not reversed');
+          note = why + '; the call was handed back: the price is back on hash ' + h + ' as X-Nano-Payment credit (' + nano(left) + ' NANO remaining), so retry with X-Nano-Payment: ' + h + (token ? ' and X-Nano-Represent: ' + token + ' (the block is public on the chain; the token binds the credit to you)' : '') + (req.headers['x-nano-payment'] ? '' : '; the x402 payment block itself is on the chain and is not reversed');
         } else if (e.unpaid || e.noAnswer) note = why + '; nothing was charged';
         return send(res, e.noAnswer ? 502 : 400, { error: e.message, ...(note ? { note } : {}) });
       }

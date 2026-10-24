@@ -179,6 +179,9 @@ test('the /v1/fetch handler hands a mid-body cut back: credit restored on the x4
   assert.equal(res.headers['x-nano-credit-remaining-raw'], AMOUNT.toString());
   assert.equal(credits[hash], AMOUNT.toString(), 'the price is back on the settled block hash');
   assert.equal(calls.filter(a => a === 'process').length, 1);
+  // The credit restored on an x402 block's public hash is bound to the token the 502 carries (test/x402-handback-bound.test.js).
+  const token = res.headers['x-nano-represent'];
+  assert.ok(token && res.body.note.includes(token), res.body.note);
 
   // The handed-back 502 must not be cached in `served` as a replayable reply, and the x402 settlement already recorded
   // the payer account so retrying with X-Nano-Payment (as the 502 note instructs) spends the restored credit without
@@ -187,7 +190,7 @@ test('the /v1/fetch handler hands a mid-body cut back: credit restored on the x4
   const blockInfoBefore = calls.filter(a => a === 'block_info').length;
   const retryEcho = response();
   await server.listeners('request')[0]({ url: '/v1/echo?msg=after-handback', method: 'GET',
-    headers: { host: 'pursekeeper.dev', 'x-nano-payment': hash }, socket: { remoteAddress: '127.0.0.1' } }, retryEcho);
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': hash, 'x-nano-represent': token }, socket: { remoteAddress: '127.0.0.1' } }, retryEcho);
   assert.equal(retryEcho.status, 200, JSON.stringify(retryEcho.body));
   assert.equal(retryEcho.body.echo, 'after-handback');
   assert.equal(retryEcho.headers['x-nano-credit-remaining-raw'], '0');
@@ -208,7 +211,7 @@ test('the /v1/fetch handler hands a mid-body cut back: credit restored on the x4
   // Meanwhile the 200 reply the restored credit actually bought is replayed when re-presented.
   const replayEcho = response();
   await server.listeners('request')[0]({ url: '/v1/echo?msg=after-handback', method: 'GET',
-    headers: { host: 'pursekeeper.dev', 'x-nano-payment': hash }, socket: { remoteAddress: '127.0.0.1' } }, replayEcho);
+    headers: { host: 'pursekeeper.dev', 'x-nano-payment': hash, 'x-nano-represent': token }, socket: { remoteAddress: '127.0.0.1' } }, replayEcho);
   assert.equal(replayEcho.status, 200, JSON.stringify(replayEcho.body));
   assert.equal(replayEcho.headers['x-nano-replay'], 'true');
 }));
