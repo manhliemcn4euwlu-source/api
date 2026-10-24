@@ -593,7 +593,10 @@ async function confirmedWithin(hash) {
 async function chargeX402Locked(req, res, payload, key) {
   const v = await x402.verify(payload, X402_REQ, {
     accountInfo: account => rpc({ action: 'account_info', account, representative: 'true', include_confirmed: 'true' }),
-    seen: async h => (h in credits) || settling.has(h),
+    // A hash this server already ruled is not API credit (noCredit: a checkout share, a stake, an own move, a donation, an
+    // expired represent record) paid for something else whoever presents it; a landed block reaches verify's alreadyLanded
+    // branch, so without this check anyone could wrap that public block in a PAYMENT-SIGNATURE and be served on it.
+    seen: async h => (h in credits) || settling.has(h) || (noCredit.has(h) ? noCredit.get(h) : false),
     reference: x402Reference,
     blockInfo: h => rpc({ action: 'block_info', json_block: 'true', hash: h }),   // amount and confirmation of a block that already landed (alreadyLanded)
     workGenerate: async hash => (await workFor(hash, { paid: true })).work   // a paying block earns its work
