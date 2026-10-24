@@ -60,8 +60,20 @@ const target = http.createServer((req, res) => {
   if (req.url === '/cut') { res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '100' }); res.write('0123456789'); setTimeout(() => res.destroy(), 20); return; }
   if (req.url === '/stall') { res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '100' }); res.write('01234'); return; }   // never finishes
   if (req.url === '/long') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('x'.repeat(300)); return; }
+  if (req.url === '/huge') {   // more bytes than any caller should get this process to read, with a counted stream
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    const chunk = 'y'.repeat(64 * 1024);
+    let n = 0;
+    const pump = () => {
+      while (n < HUGE_BYTES) { const ok = res.write(chunk); n += chunk.length; served = n; if (!ok) { res.once('drain', pump); return; } }
+      res.end();
+    };
+    pump(); return;
+  }
   res.writeHead(200, { 'content-type': 'text/plain' }); res.end('whole body');
 });
+const HUGE_BYTES = 40_000_000;
+let served = 0;
 before(() => new Promise(r => target.listen(0, '127.0.0.1', r)));
 after(() => { target.closeAllConnections(); target.close(); });
 const PUBLIC = '93.184.216.34';
@@ -92,6 +104,28 @@ test('a body past the character bound says it was cut and how much came back', v
   const ok = await fetchText('http://target.test/ok', undefined, { headersMs: 5000, bodyMs: 5000, maxBytes: 1_000_000, maxChars: 100 });
   assert.equal(ok.truncated, false);
   assert.equal(ok.text, 'whole body');
+}));
+
+// llmrt, 2026-10-23: maxBytes was documented as the bound on what is read off the socket, but fetchText called r.text() and
+// sliced the finished string. A paid call to a target with a large body read all of it first: 200,000,000 bytes arrived and
+// the process grew by 226 MB, and the reply still said "the body was itself cut at 1000 bytes". The bound is now enforced
+// during the read and the stream is cancelled at it, so the target is left with unread bytes and the answer says the total
+// is unknown rather than presenting the number read as the document's length.
+test('the byte bound stops the read instead of slicing what was already read', viaLocal(async () => {
+  served = 0;
+  const MAX = 1_000_000;
+  const r = await fetchText('http://target.test/huge', undefined, { headersMs: 5000, bodyMs: 10_000, maxBytes: MAX, maxChars: 100 });
+  assert.equal(r.text.length, 100);
+  assert.equal(r.truncated, true);
+  assert.equal(r.bytes_read, MAX, 'the answer names the bound it stopped at');
+  assert.equal(r.body_total_unknown, true, 'bytes past the bound were never read, so the total cannot be stated');
+  assert.match(r.next, /full length is unknown/);
+  assert.ok(served > MAX, 'the target had more to send than the bound (it sent ' + served + ' bytes)');
+  assert.ok(served < HUGE_BYTES, 'and the read stopped early, so the target was not drained (it sent ' + served + ' of ' + HUGE_BYTES + ')');
+  // A body inside the byte bound still comes back whole and is not marked as cut, so the flag stays a positive statement.
+  const ok = await fetchText('http://target.test/ok', undefined, { headersMs: 5000, bodyMs: 5000, maxBytes: 1_000_000, maxChars: 100 });
+  assert.equal(ok.truncated, false);
+  assert.equal(ok.bytes_read, undefined);
 }));
 
 test('a body cut after the headers (content-length 100, ten bytes, socket destroyed) is flagged for hand-back and named', viaLocal(async () => {
