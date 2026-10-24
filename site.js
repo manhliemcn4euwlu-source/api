@@ -464,22 +464,31 @@ const KEEP_MS = 30 * 24 * 3600_000;
 let sellersCache = { at: 0, data: null };
 function probeLogAppend(checked_at, list, probes) {
   try {
-    const rows = list.map((sel, i) => probes[i].door === 'mail' ? null : JSON.stringify({ t: checked_at, id: sel.id, ok: probes[i].reachable, status: probes[i].status, ms: probes[i].ms, ...(probes[i].rail !== undefined ? { rail: probes[i].rail } : {}) })).filter(Boolean);
+    // `ok` is true, false, or null for a probe that got no answer at all (see probe()). A null is written as null, not as
+    // false, so the history can leave it out of the fraction instead of counting an outage against the seller.
+    const rows = list.map((sel, i) => probes[i].door === 'mail' ? null : JSON.stringify({ t: checked_at, id: sel.id, ok: probes[i].reachable, status: probes[i].status, ms: probes[i].ms, ...(probes[i].rail !== undefined ? { rail: probes[i].rail } : {}), ...(probes[i].unknown ? { unknown: true } : {}) })).filter(Boolean);
     if (rows.length) fs.appendFileSync(PROBE_LOG, rows.join('\n') + '\n');
   } catch {}
 }
-function probeHistory() {
+// logFile defaults to the real log; a test passes its own file so the three answers can be exercised without the site's data.
+function probeHistory(logFile = PROBE_LOG) {
   const out = {}; const cutoff = Date.now() - HIST_MS; const keep = [];
-  let lines; try { lines = fs.readFileSync(PROBE_LOG, 'utf8').split('\n'); } catch { return out; }
+  let lines; try { lines = fs.readFileSync(logFile, 'utf8').split('\n'); } catch { return out; }
   for (const ln of lines) {
     if (!ln) continue; let r; try { r = JSON.parse(ln); } catch { continue; }
     const t = Date.parse(r.t); if (!(t >= Date.now() - KEEP_MS)) continue; keep.push(ln);
     if (!(t >= cutoff)) continue;
-    const h = out[r.id] ||= { probes: 0, reachable: 0, since: r.t }; h.probes++; if (r.ok) h.reachable++;
+    const h = out[r.id] ||= { probes: 0, reachable: 0, unknown: 0, since: r.t };
+    h.probes++;
+    // A probe that got no answer at all (r.ok === null, or the `unknown` flag on rows written since 2026-10-23) is counted
+    // separately: it says nothing about whether the door works, so it must not lower the fraction. Rows written before the flag
+    // existed carry ok:false for the same case and cannot be told apart; they keep their old meaning.
+    if (r.ok === null || r.unknown === true) h.unknown++; else if (r.ok) h.reachable++;
     if (r.rail !== undefined) { h.rail_checked = (h.rail_checked || 0) + 1; h.rail_open = (h.rail_open || 0) + (r.rail === 'open' ? 1 : 0); }
   }
-  for (const h of Object.values(out)) h.fraction = +(h.reachable / h.probes).toFixed(3);
-  if (lines.length > keep.length + 5000) { try { fs.writeFileSync(PROBE_LOG, keep.join('\n') + '\n'); } catch {} }
+  // The fraction is over the probes that got an answer: unknown probes are reported beside it, not folded into the denominator.
+  for (const h of Object.values(out)) { const answered = h.probes - h.unknown; h.fraction = answered ? +(h.reachable / answered).toFixed(3) : null; }
+  if (lines.length > keep.length + 5000) { try { fs.writeFileSync(logFile, keep.join('\n') + '\n'); } catch {} }
   return out;
 }
 function sellersFile() {
@@ -509,7 +518,14 @@ async function probe(sel) {
     }
     return out;
   } catch (e) {
-    return { reachable: false, status: null, ms: Date.now() - t0, error: String(e.cause?.code || e.name || e.message).slice(0, 60) };
+    // A probe that never got an answer is not a seller that answered something else. Both were recorded as reachable:false,
+    // so a timeout or a DNS failure counted against a seller's 7-day reachability fraction exactly like a live door returning
+    // 200, and the fraction is what a reader uses to judge whether a seller still works. `unknown` is the third answer the
+    // probe doc never had: no HTTP status arrived, so the seller's door was neither seen open nor seen answering wrongly
+    // (llmrt, 2026-10-23). A network error is not evidence about the seller's service.
+    const err = String(e.cause?.code || e.name || e.message).slice(0, 60);
+    const noAnswer = /timeout|abort|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|UND_ERR|fetch failed|network/i.test(err);
+    return { reachable: noAnswer ? null : false, status: null, ms: Date.now() - t0, error: err, ...(noAnswer ? { unknown: true } : {}) };
   }
 }
 async function sellers(force) {
@@ -520,7 +536,7 @@ async function sellers(force) {
   probeLogAppend(checked_at, list, probes);
   const hist = probeHistory();
   sellersCache = { at: Date.now(), data: { checked_at,
-    probe: { what: 'one unpaid request per seller, expecting the status the seller declared (normally 402; a seller whose paid route is not a plain GET may name a separate free status route, shown in the entry); it pays nothing and measures no settlement; a seller reached only by mail is not probed and shows live.door = "mail"; a multi-rail seller whose status route stays 200 while its Nano door is closed may name a rail check (probe.rail: a field in its own status body), logged as live.rail = open | closed and counted in history_7d.rail_open, since 2026-10-17', every_minutes: 10, timeout_ms: 8000, states: ['reachable', 'unreachable'], history_days: 7, history_since: '2026-09-20', delisting: 'never for downtime; only when the seller asks. The only time-based rule is the second half of the newcomer credit, which needs 14 days of answered probes.' },
+    probe: { what: 'one unpaid request per seller, expecting the status the seller declared (normally 402; a seller whose paid route is not a plain GET may name a separate free status route, shown in the entry); it pays nothing and measures no settlement; a seller reached only by mail is not probed and shows live.door = "mail"; a multi-rail seller whose status route stays 200 while its Nano door is closed may name a rail check (probe.rail: a field in its own status body), logged as live.rail = open | closed and counted in history_7d.rail_open, since 2026-10-17', every_minutes: 10, timeout_ms: 8000, states: ['reachable', 'unreachable', 'not checked'], history_days: 7, history_since: '2026-09-20', unknown_rule: 'a probe that got no HTTP answer at all (timeout, DNS failure, connection refused or reset) is live.reachable = null and live.unknown = true: it is not evidence that the door is down, so it is counted in history_7d.unknown and left out of the reachability fraction (since 2026-10-23)', delisting: 'never for downtime; only when the seller asks. The only time-based rule is the second half of the newcomer credit, which needs 14 days of answered probes.' },
     sellers: list.map((sel, i) => ({ ...sel, live: probes[i], history_7d: hist[sel.id] || null, quote: QUOTE[sel.id] || null })) } };
   return sellersCache.data;
 }
@@ -531,9 +547,15 @@ function sellerRows(sd) {
   if (!sd.sellers.length) return '<p class="muted">None yet.</p>';
   return `<table>${sd.sellers.map(s => {
     const l = s.live;
-    const live = (l.door === 'mail' ? `<b>mail door</b>, not probed` : l.reachable ? `<b>reachable</b>, answered ${l.status} in ${l.ms} ms` : `<b>unreachable</b> at last check${l.status ? ` (HTTP ${l.status})` : l.error ? ` (${esc(l.error)})` : ''}`) + (l.rail ? `; Nano rail <b>${l.rail}</b> by the seller's own status` : '');
+    // A mail door is not probed at all; an unanswered probe is `unknown`, not `unreachable` (see probe()). The three cases are
+    // distinct in the page for the same reason they are distinct in the data.
+    const live = (l.door === 'mail' ? `<b>mail door</b>, not probed`
+      : l.unknown ? `<b>not checked</b>: no answer at the last probe${l.error ? ` (${esc(l.error)})` : ''}, so this says nothing about the door`
+      : l.reachable ? `<b>reachable</b>, answered ${l.status} in ${l.ms} ms`
+      : `<b>unreachable</b> at last check${l.status ? ` (HTTP ${l.status})` : l.error ? ` (${esc(l.error)})` : ''}`) + (l.rail ? `; Nano rail <b>${l.rail}</b> by the seller's own status` : '');
     const h = s.history_7d;
-    const hist = h ? `<br>7 d: ${h.reachable}/${h.probes} probes reachable${h.rail_checked ? `; Nano rail open on ${h.rail_open || 0}/${h.rail_checked} checks` : ''}` : '';
+    const answered = h ? h.probes - (h.unknown || 0) : 0;
+    const hist = h ? `<br>7 d: ${answered ? `${h.reachable}/${answered} probes reachable` : 'no probe got an answer'}${h.unknown ? ` (${h.unknown} got no answer and are not counted)` : ''}${h.rail_checked ? `; Nano rail open on ${h.rail_open || 0}/${h.rail_checked} checks` : ''}` : '';
     const q = s.quote ? `<br>Quote ${s.quote.date}: <b>${esc(s.quote.verdict.replace(/_/g, ' '))}</b>${s.quote.stability ? `, ${esc(s.quote.stability.replace(/_/g, ' '))}` : ''}` : '';
     return `<tr><td class="num"><small>${live}<br>${sd.checked_at.slice(11, 16)} UTC${hist}${q}</small></td><td><b>${esc(s.name)}</b> by ${esc(s.operator)}${s.built_for_this ? ' <small class="muted">(Nano added after pursekeeper asked)</small>' : ''}<br>${esc(s.what)}<br><small>Price: ${esc(s.price)}. Endpoint: <code>${esc(s.endpoint)}</code>. ${esc(s.pay)}</small><br><small>Verified ${s.verified.date} by a real payment, block ${hash(s.verified.block)} ${s.verified.ledger_id ? `(ledger #${s.verified.ledger_id})` : '(from my x402 client account, not ledgered)'}: ${esc(s.verified.how)}. ${s.docs ? `<a href="${esc(s.docs)}">Docs</a>` : ''}${s.source ? ` · <a href="${esc(s.source)}">Source</a>` : ''}</small>${s.note ? `<br><small class="muted">${esc(s.note)}</small>` : ''}</td></tr>`;
   }).join('')}</table>`;
@@ -693,4 +715,6 @@ async function handle(req, res, u, send) {
   return false;
 }
 
-module.exports = { handle, page, redact, esc, xno, addr, hash, when, day, facilitatorPage, facilitatorData, counterpartyNumbers, inflowLabels, reclassifyCold, coldSenders, passthroughSources, COLD, nanoToRaw, COUNTERPARTY_MIN_NANO, COUNTERPARTY_MIN_RAW, DB_PATH, RPC, ADDRESS, EXPLORER };
+// probe and probeHistory are exported for tests only: whether an unanswered request is a down door is decided in probe(), and
+// the reachability fraction a reader sees is computed in probeHistory().
+module.exports = { handle, page, redact, esc, xno, addr, hash, when, day, facilitatorPage, facilitatorData, counterpartyNumbers, inflowLabels, reclassifyCold, coldSenders, passthroughSources, COLD, nanoToRaw, COUNTERPARTY_MIN_NANO, COUNTERPARTY_MIN_RAW, DB_PATH, RPC, ADDRESS, EXPLORER, probeForTest: probe, probeHistoryForTest: probeHistory };
