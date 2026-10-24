@@ -37,7 +37,9 @@ realWrite(remap(X402_LOG), JSON.stringify([{ hash: 'A'.repeat(64), payer: 'nano_
 realWrite(STATS, JSON.stringify({ calls_paid: 41, calls_x402: 37, calls_402: 900, started: '2026-09-07T00:00:00.000Z' }));
 
 const boot = () => {
-  for (const k of Object.keys(require.cache)) if (k.includes(path.join('api', 'server.js'))) delete require.cache[k];
+  // The key is the resolved path of the module, whatever the checkout directory is named: matching the literal
+  // 'api/server.js' passed only in a directory called api (pursekeeper, 2026-10-24 01:40).
+  for (const k of Object.keys(require.cache)) if (k === require.resolve('../server')) delete require.cache[k];
   return require('../server');
 };
 

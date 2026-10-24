@@ -230,6 +230,9 @@ function saveStatsSoon() {
   if (statsFlushTimer.unref) statsFlushTimer.unref();
 }
 process.on('exit', () => { if (statsFlushTimer) { clearTimeout(statsFlushTimer); statsFlushTimer = null; saveStats(); } });
+// `systemctl restart` sends SIGTERM, and a process killed by a signal does not run the 'exit' listener, so a restart could
+// drop the interval the coalescing timer held (pursekeeper, 2026-10-24 01:40). Both signals flush first and then exit.
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { if (statsFlushTimer) { clearTimeout(statsFlushTimer); statsFlushTimer = null; } saveStats(); process.exit(0); });
 // A handed-back call is one that was charged and then not served (a target that never answered, a work_generate failure, a
 // redirect that could not be followed). Its price goes back on the hash as credit, so it must stop counting as a paid call:
 // until 2026-10-23 only calls_paid was rolled back, and an x402 payment that bought nothing left calls_x402 raised, so
