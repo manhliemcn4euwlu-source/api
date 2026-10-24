@@ -620,7 +620,6 @@ async function confirmedWithin(hash) {
 }
 async function chargeX402Locked(req, res, payload, key) {
   let landedBlock = null;
-  const rawAcct = String(payload && payload.payload && payload.payload.block && payload.payload.block.account || '').replace(/^xrb_/, 'nano_');
   const v = await x402.verify(payload, X402_REQ, {
     accountInfo: account => rpc({ action: 'account_info', account, representative: 'true', include_confirmed: 'true' }),
     // A hash this server already ruled is not API credit (noCredit: a checkout share, a stake, an own move, a donation, an
@@ -641,7 +640,7 @@ async function chargeX402Locked(req, res, payload, key) {
       if (noCredit.has(h)) return noCredit.get(h);
       if (facilitatorSeen(h)) return 'this block was already broadcast or settled through the x402 facilitator';
       if (feeSend.get(h) === true) { noCredit.set(h, NO_CREDIT_REASON); return NO_CREDIT_REASON; }
-      const pr = purposeReg.hashes.get(h) || (rawAcct && purposeReg.accounts.get(rawAcct));
+      const pr = purposeReg.hashes.get(h);
       if (pr) { noCredit.set(h, pr); return pr; }
       return false;
     },
@@ -677,7 +676,10 @@ async function chargeX402Locked(req, res, payload, key) {
   // (hashlock.js) and runs after this serve, when block_info finds the block (2026-09-29).
   settling.add(v.hash);
   try {
-    const acctReason = purposeReg.accounts.get(v.payer);
+    // Only a landed block is held to the account exclusions here (parity with the bearer door, which sees landed blocks
+    // only): a fresh send from one of the listed accounts is a paid call like any other, and the own x402 test client
+    // (own-addresses.json) relies on that to test the seller end to end. PR #117 applied it to fresh blocks too; narrowed at merge.
+    const acctReason = v.alreadyLanded ? purposeReg.accounts.get(v.payer) : null;
     if (acctReason) {
       noCredit.set(v.hash, acctReason);
       return paymentRequired(res, 'x402: ' + acctReason, req), false;
