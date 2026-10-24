@@ -63,8 +63,8 @@ function node(over = {}) {
 }
 const deps = (rpc, over = {}) => ({ rpc, workThreshold: THRESHOLD, sleep: async () => {}, ...over });
 
-test('/supported lists exact on nano:mainnet, v2, work required', () => {
-  assert.deepEqual(f.SUPPORTED.kinds.map(k => [k.x402Version, k.scheme, k.network, k.extra.work]), [[2, 'exact', 'nano:mainnet', 'required']]);
+test('/supported lists exact on nano:mainnet, v2, work required, workOptional false', () => {
+  assert.deepEqual(f.SUPPORTED.kinds.map(k => [k.x402Version, k.scheme, k.network, k.extra.work, k.extra.workOptional]), [[2, 'exact', 'nano:mainnet', 'required', false]]);
 });
 
 test('verify: a valid block is valid and names the payer', async () => {

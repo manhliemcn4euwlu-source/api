@@ -270,7 +270,10 @@ async function settleLocked(body, deps) {
   } finally { settling.delete(v._hash); }
 }
 
-const SUPPORTED = { kinds: [{ x402Version: x402.X402_VERSION, scheme: x402.SCHEME, network: x402.NETWORK, extra: { asset: x402.ASSET, work: 'required', workThreshold: x402.WORK_THRESHOLD } }], extensions: [], signers: {} };
+// extra.workOptional is the key the scheme draft (kilkelly/x402-nano-exact-scheme-proposal PR #1, 2026-10-23 text) uses for a
+// facilitator that generates work at settlement; this one attaches none (block.work is checked at /verify), so it says false
+// outright rather than leaving the key out. work: 'required' and workThreshold are the older spelling and stay for a while.
+const SUPPORTED = { kinds: [{ x402Version: x402.X402_VERSION, scheme: x402.SCHEME, network: x402.NETWORK, extra: { asset: x402.ASSET, work: 'required', workOptional: false, workThreshold: x402.WORK_THRESHOLD } }], extensions: [], signers: {} };
 
 // --- HTTP ---------------------------------------------------------------------
 
@@ -412,8 +415,11 @@ Endpoints (the x402 facilitator HTTP API; @x402/core and the x402 Python package
 
   GET  /supported
        -> {"kinds":[{"x402Version":2,"scheme":"exact","network":"nano:mainnet",
-            "extra":{"asset":"XNO","work":"required","workThreshold":"fffffff800000000"}}],
+            "extra":{"asset":"XNO","work":"required","workOptional":false,
+                     "workThreshold":"fffffff800000000"}}],
            "extensions":[],"signers":{}}
+       workOptional false (the scheme draft's key) and work "required" (the older one) say the
+       same thing: this facilitator attaches no work, so block.work must be valid at /verify.
 
   POST /verify   body {"x402Version":2,"paymentPayload":{...},"paymentRequirements":{...}}
        -> {"isValid":true,"payer":"nano_..."}
