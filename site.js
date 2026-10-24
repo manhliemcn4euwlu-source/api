@@ -166,7 +166,13 @@ async function load() {
       const r = await fetch(RPC, { method: 'POST', body: JSON.stringify({ action: 'account_balance', account: ADDRESS, include_only_confirmed: 'true' }) }).then(r => r.json());
       if (r && r.error) throw new Error(r.error);
       hot = BigInt(r.balance || 0); receivable = BigInt(r.receivable ?? r.pending ?? 0);
-    } catch (e) { hot = null; receivable = null; hotError = String((e && e.message) || e).slice(0, 160); }
+    } catch (e) {
+      // The node's own error text never reaches a published page: it can carry an account or a hash, and every other string
+      // on this page goes through redact() for that reason. The published phrase is fixed; the detail stays in the log
+      // (pursekeeper, 2026-10-24 01:40).
+      hot = null; receivable = null; hotError = 'the node could not answer';
+      console.error('site: account_balance failed: ' + String((e && e.message) || e).slice(0, 200));
+    }
 
     const sum = rows => rows.reduce((a, r) => a + BigInt(r.amount_raw), 0n);
     // The size of the budget behind the hot wallet is not published, by the funder's

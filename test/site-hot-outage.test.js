@@ -51,7 +51,12 @@ test('an unreachable node leaves the hot balance null and names the outage, neve
   const d = await site.loadForTest();
   assert.equal(d.numbers.hot, null, 'not 0n: the balance was never read');
   assert.equal(d.numbers.receivable, null);
-  assert.match(d.numbers.hot_error, /ECONNREFUSED/);
+  // The published phrase is fixed: the node's own text can carry an account or a hash, and every other string on this
+  // page passes through redact() for that reason (pursekeeper, 2026-10-24 01:40).
+  assert.equal(d.numbers.hot_error, 'the node could not answer');
+  // numbers also holds BigInts, so only the published strings are searched for the node's own text.
+  const published = Object.values(d.numbers).filter(v => typeof v === 'string').join(' ');
+  assert.ok(!published.includes('ECONNREFUSED'), 'the node error text must not be published');
 });
 
 test('a node that answers with an error object is also an outage, not a zero balance', async () => {
@@ -59,7 +64,9 @@ test('a node that answers with an error object is also an outage, not a zero bal
   fresh();
   const d = await site.loadForTest();
   assert.equal(d.numbers.hot, null);
-  assert.match(d.numbers.hot_error, /Database read failed/);
+  assert.equal(d.numbers.hot_error, 'the node could not answer');
+  const published = Object.values(d.numbers).filter(v => typeof v === 'string').join(' ');
+  assert.ok(!published.includes('Database read failed'), 'the node error text must not be published');
 });
 
 test('a node that answers a balance publishes it as before', async () => {
