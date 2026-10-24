@@ -626,8 +626,18 @@ async function chargeX402Locked(req, res, payload, key) {
     // A hash this server already ruled is not API credit (noCredit: a checkout share, a stake, an own move, a donation, an
     // expired represent record) paid for something else whoever presents it; a landed block reaches verify's alreadyLanded
     // branch, so without this check anyone could wrap that public block in a PAYMENT-SIGNATURE and be served on it.
+    // A hash in `credits` whose credit is untouched and has no hand-back record (a confirmed 0.001 NANO send inspected via
+    // GET /v1/credit before PAYMENT-SIGNATURE arrived) has bought no call yet and is treated as unseen; a handed-back x402
+    // payment (`handback[h]`) is spendable over PAYMENT-SIGNATURE only with the matching X-Nano-Represent token.
     seen: async h => {
-      if ((h in credits) || settling.has(h)) return true;
+      if (h in credits) {
+        if (BigInt(credits[h] || '0') < PRICE_RAW) return true;
+        if (handback[h] || x402Log.some(e => e.hash === h)) {
+          const hb = handback[h];
+          if (!hb || String(req.headers['x-nano-represent'] || '').trim() !== hb.token) return true;
+        }
+      }
+      if (settling.has(h)) return true;
       if (noCredit.has(h)) return noCredit.get(h);
       if (facilitatorSeen(h)) return 'this block was already broadcast or settled through the x402 facilitator';
       if (feeSend.get(h) === true) { noCredit.set(h, NO_CREDIT_REASON); return NO_CREDIT_REASON; }
@@ -702,12 +712,15 @@ async function chargeX402Locked(req, res, payload, key) {
       res.setHeader('x-nano-represent', token);
       return paymentRequired(res, 'x402: block ' + s.transaction + ' was broadcast but not yet confirmed; re-present the same PAYMENT-SIGNATURE with X-Nano-Represent', req, { note, represent_token: token }), false;
     }
-    credits[s.transaction] = '0';
+    const rem = (s.transaction in credits ? BigInt(credits[s.transaction] || '0') : PRICE_RAW) - PRICE_RAW;
+    credits[s.transaction] = (rem > 0n ? rem : 0n).toString();
     creditAccounts[s.transaction] = v.payer;
     if (v.hash !== s.transaction) { credits[v.hash] = '0'; creditAccounts[v.hash] = v.payer; }
     save(); saveCreditAccounts();
     if (represent[s.transaction] || represent[v.hash]) { delete represent[s.transaction]; delete represent[v.hash]; saveRepresent(); }
-    x402Log.push({ hash: s.transaction, payer: v.payer, amount_raw: PRICE_RAW.toString(), resource: req.url, at: new Date().toISOString(), work_by: v.workBy || 'client' });
+    const prevLog = x402Log.find(e => e.hash === s.transaction);
+    if (prevLog) { prevLog.resource = req.url; prevLog.at = new Date().toISOString(); }
+    else x402Log.push({ hash: s.transaction, payer: v.payer, amount_raw: PRICE_RAW.toString(), resource: req.url, at: new Date().toISOString(), work_by: v.workBy || 'client' });
     rememberPayer(v.payer);
     try { saveX402Log(); } catch {}
     stats.calls_paid++; stats.calls_x402++;

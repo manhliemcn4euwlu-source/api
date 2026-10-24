@@ -215,7 +215,7 @@ async function fateOf(account, hash, previous) {
 }
 async function explainFate(account, hash, previous, lastToken) {
   const fate = await fateOf(account, hash, previous);
-  const again = 're-present the same PAYMENT-SIGNATURE for the same call' + (lastToken ? ' with X-Nano-Represent token ' + lastToken : '') + '; do not sign a new block';
+  const again = 're-present the same PAYMENT-SIGNATURE for the same call' + (lastToken ? ' with X-Nano-Represent token ' + lastToken + ' (or X-Nano-Payment: ' + hash + ' with X-Nano-Represent: ' + lastToken + ')' : ' (or if the call was handed back, retry with X-Nano-Payment: ' + hash + ' and the X-Nano-Represent token from the reply that handed it back)') + '; do not sign a new block';
   const text = fate === 'landed' ? 'the block is on the chain (hash ' + hash + '): ' + again + ' (pursekeeper.dev replays the reply it bought for ten minutes)'
     : fate === 'untouched' ? 'the account frontier is still ' + previous + ', so the seller did not broadcast the block and nothing moved: ' + again + ' while the frontier stays there'
     : fate === 'dead' ? 'the account frontier moved past ' + previous + ' to another block, not this one (hash ' + hash + '): a concurrent payment, a receive or a representative change from this wallet landed first, so this block can never land and nothing moved from it; sign a new block for this call'
@@ -388,6 +388,8 @@ function savePayload(file, body) {
     noteSignedRedirect(r);
   }
   if (r) {
+    const repTok = r.headers.get('x-nano-represent');
+    if (repTok) lastToken = String(repTok);
     const settle = r.headers.get('payment-response');
     if (settle) console.error('settlement:', unb64(settle));
     // x-nano-replay: true marks a reply served again from the seller's ten-minute replay cache (the same payment, method, URL
