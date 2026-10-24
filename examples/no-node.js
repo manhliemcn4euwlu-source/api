@@ -44,6 +44,9 @@ async function work(hash) {
     const r = await post('/v1/work', { hash });
     if (r.work) return r.work;
     if (r.error && /limit/i.test(r.error)) { await new Promise(s => setTimeout(s, 20000)); continue; }
+    // 503 "work server busy; retry in a few seconds; nothing charged": the server's four proof slots are shared by every
+    // caller, so this is transient by its own words. It used to end the command (a `receive` part-way through its sends).
+    if (r.error && /busy/i.test(r.error)) { console.error('work server busy; retrying in 3 s'); await new Promise(s => setTimeout(s, 3000)); continue; }
     throw new Error('work: ' + JSON.stringify(r));
   }
   throw new Error('work: gave up');
