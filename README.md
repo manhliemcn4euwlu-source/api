@@ -18,7 +18,9 @@ payment path is this short? Every payment, decision and cost is published.
 
 Overpayment stays as credit on that hash, capped at 1 NANO per hash, so one
 send of 0.05 NANO covers 50 calls. A send past the cap is credited at 1 NANO
-and the reply names the excess. The server checks the block on its own
+and the reply names the excess: `capped`, `amount_raw` and `excess_raw` on every
+`/v1/credit` read of the hash, and the `X-Nano-Credit-Excess-Raw` header on paid
+replies. The server checks the block on its own
 Nano node (`block_info`): it must be a confirmed send to `pay_to`, made after
 the service went live.
 

@@ -37,6 +37,16 @@ const CREDIT_ACCOUNTS = path.join(__dirname, 'data', 'credit-accounts.json');
 let creditAccounts = {};
 { const r = readJsonStore(CREDIT_ACCOUNTS); if (r.damaged) console.error('credit-accounts: ' + CREDIT_ACCOUNTS + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on')); if (r.value && typeof r.value === 'object') creditAccounts = r.value; }
 const saveCreditAccounts = () => { try { writeJsonAtomic(CREDIT_ACCOUNTS, creditAccounts); } catch {} };
+// Hashes credited at the 1 NANO cap, with what the block carried (data/credit-capped.json): hash -> { amount_raw, excess_raw }.
+// README: "A send past the cap is credited at 1 NANO and the reply names the excess". The excess used to be named only in
+// the reply of the presentation that first credited the hash, and only when that was GET /v1/credit: presented first as
+// X-Nano-Payment on a paid route (the documented flow) the reply said nothing, and every later /v1/credit read took the
+// stored-credit branch, which never carried it. Kept so every reply about the hash can name it.
+const CREDIT_CAPPED = path.join(__dirname, 'data', 'credit-capped.json');
+let creditCapped = {};
+{ const r = readJsonStore(CREDIT_CAPPED); if (r.value && typeof r.value === 'object' && !Array.isArray(r.value)) creditCapped = r.value; }
+const saveCreditCapped = () => { try { writeJsonAtomic(CREDIT_CAPPED, creditCapped); } catch {} };
+const cappedOf = hash => { const c = creditCapped[hash]; return c ? { capped: true, amount_raw: c.amount_raw, excess_raw: c.excess_raw } : {}; };
 const X402_LOG = path.join(__dirname, 'data', 'x402.json');   // settled x402 blocks: hash, payer, amount, resource, at
 // Work sources, tried in order: WORK_URLS (comma-separated RPC-style work_generate endpoints,
 // e.g. a keyed hosted GPU work server), then the local node. Clients may omit block.work on
@@ -343,7 +353,7 @@ async function creditForUnlocked(hash) {
     }
     const reason = creditAccounts[hash] && purposeReg.accounts.get(creditAccounts[hash]);   // account excluded since this credit was stored
     if (reason) { noCredit.set(hash, reason); if (credits[hash] !== '0') { credits[hash] = '0'; save(); } return { error: reason }; }
-    return { remaining: BigInt(credits[hash]) };
+    return { remaining: BigInt(credits[hash]), ...cappedOf(hash) };
   }
   // Same root cause as /v1/verify below: any node error used to read as "this send is not on the chain yet". Here the answer
   // costs more than a wrong field, because this route is what a payer polls to learn whether the Nano it sent became credit: a
@@ -378,7 +388,10 @@ async function creditForUnlocked(hash) {
   save();
   creditAccounts[hash] = b.block_account; saveCreditAccounts();
   rememberPayer(b.block_account);
-  if (credited < amount) return { remaining: credited, capped: true, amount_raw: amount.toString(), excess_raw: (amount - credited).toString() };
+  if (credited < amount) {
+    creditCapped[hash] = { amount_raw: amount.toString(), excess_raw: (amount - credited).toString() }; saveCreditCapped();
+    return { remaining: credited, ...cappedOf(hash) };
+  }
   return { remaining: credited };
 }
 
@@ -408,7 +421,7 @@ function send(res, code, body, type = 'application/json') {
   const data = typeof body === 'string' ? body : JSON.stringify(body, null, 1);
   const headers = { 'content-type': type + '; charset=utf-8', 'access-control-allow-origin': '*',
     'access-control-allow-headers': 'X-Nano-Payment, PAYMENT-SIGNATURE, X-PAYMENT, X-Nano-Represent, Content-Type',
-    'access-control-expose-headers': 'PAYMENT-REQUIRED, PAYMENT-RESPONSE, X-Nano-Credit-Remaining-Raw, X-Nano-Payment-Hash, X-Nano-Represent, X-Nano-Replay' };
+    'access-control-expose-headers': 'PAYMENT-REQUIRED, PAYMENT-RESPONSE, X-Nano-Credit-Remaining-Raw, X-Nano-Credit-Excess-Raw, X-Nano-Payment-Hash, X-Nano-Represent, X-Nano-Replay' };
   // A reply served for a payment is remembered for a re-presentation of the same payment (replayIfServed).
   // Handed-back errors (400 redirect refusal or 502 noAnswer/work failure after charge) restore the credit and are not
   // served replies: caching >=200 non-2xx replayed the 400/502 (with its stale restored-credit header) and overwrote any
@@ -995,6 +1008,7 @@ async function charge(req, res) {
     save();
     stats.calls_paid++;
     res.setHeader('x-nano-credit-remaining-raw', left.toString());
+    if (c.capped) res.setHeader('x-nano-credit-excess-raw', c.excess_raw);   // credited at the 1 NANO cap: what the send carried past it
     res.chargeRail = 'bearer';
     res.paidHash = String(hash).toUpperCase(); res.replayKey = replayKey(req); res.replayBind = { bearer: true };
     return true;
