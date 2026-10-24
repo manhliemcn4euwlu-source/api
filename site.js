@@ -730,4 +730,6 @@ async function handle(req, res, u, send) {
 
 // Both test hooks are exported: probe/probeHistory for the reachability cases and loadForTest/clearCache for the
 // published hot balance. Each was added by a different fix and neither replaces the other.
+// clearCache() drops the ten-minute cache so a test can drive a fresh read against a mocked node.
+function clearCache() { cache = { at: 0, data: null }; }
 module.exports = { handle, page, redact, esc, xno, addr, hash, when, day, facilitatorPage, facilitatorData, counterpartyNumbers, inflowLabels, reclassifyCold, coldSenders, passthroughSources, COLD, nanoToRaw, COUNTERPARTY_MIN_NANO, COUNTERPARTY_MIN_RAW, DB_PATH, RPC, ADDRESS, EXPLORER, probeForTest: probe, probeHistoryForTest: probeHistory, loadForTest: load, clearCache };
