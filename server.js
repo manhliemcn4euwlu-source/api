@@ -1429,7 +1429,8 @@ const server = http.createServer(async (req, res) => {
           r('/v1/hash', 'POST', 'sha256 of the request body, with server time'),
           r('/v1/work', 'POST', 'Nano proof of work for {"hash": H} at the send threshold, from a GPU in about a second; 6 per minute per IP free; paid calls have no per-minute limit, at most four proofs are generated at once and a fifth call answers 503 with nothing charged; a workless x402 block arriving while four are in flight is refused with a 402 that asks for work attached, nothing broadcast'),
         ],
-        free: [base + '/v1/verify', base + '/v1/receivable', base + '/v1/account_info', base + '/v1/process', base + '/v1/requests', base + '/v1/price', base + '/v1/stats', base + '/v1/x402'],
+        // Every free route: /v1/credit is the sixth counted one (60/min, in /v1/stats since 2026-10-23) and was missing here.
+        free: [base + '/v1/verify', base + '/v1/receivable', base + '/v1/account_info', base + '/v1/process', base + '/v1/requests', base + '/v1/credit', base + '/v1/price', base + '/v1/stats', base + '/v1/x402'],
         payment_requirements: base + '/v1/x402',
       });
     }
