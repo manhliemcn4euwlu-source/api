@@ -4,15 +4,20 @@
 // live (llmrt, 2026-10-23: a 1-raw send to an account with one block answered receivable_raw "0" while /v1/receivable listed the
 // send, and a 1-raw send to an unopened account was not mentioned in the account_info answer at all).
 'use strict';
-const { test, after } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 require('./guard-data');   // no write under data/ while the server boots
 process.env.NANO_RPC = 'http://node.test/rpc';
 const { shapeAccountInfo, server } = require('../server');
+const N = require('nanocurrency');
 
 const F = 'A'.repeat(64);
-const OPEN = 'nano_165q65ujhsmsmnn5ejapbem1iieuq4fxzwnshmz7z7zrn9gm3gy8umx998cf';
-const UNOPENED = 'nano_1fhxswg75u3gtq4t5f3ikhx7sbbm5z8ugyf6rmks3cttbyrhk6ptsfonj9sg';
+// Fixture accounts are synthetic, derived from random keys: a real account used here collides with the live exclusion lists
+// (data/own-addresses.json, data/cold-addresses.json) and the case then depends on which box runs it. Same rule as the
+// comment in test/cohorts-passthrough.test.js (pursekeeper, 2026-10-24 01:40).
+const synth = async () => N.deriveAddress(N.derivePublicKey(N.deriveSecretKey(await N.generateSeed(), 0)), { useNanoPrefix: true });
+let OPEN, UNOPENED;
+before(async () => { OPEN = await synth(); UNOPENED = await synth(); });
 const realFetch = globalThis.fetch;
 after(() => { globalThis.fetch = realFetch; });
 
@@ -46,6 +51,24 @@ test('an unopened account reports what it can pocket instead of leaving the fiel
   assert.equal(r.body.found, false);
   assert.equal(r.body.receivable_raw, '1', 'a send is waiting; the answer must say so');
   assert.equal(r.body.receivable_count, 1);
+});
+
+test('an unopened account sums the receivable block shape a real node answers', async () => {
+  // Without `source: 'true'` a node answers blocks as a map of hash to an amount string, not to an object with `amount`, so
+  // BigInt(v.amount) threw into the catch and the field published null on a real node (pursekeeper, 2026-10-24 01:40).
+  const H1 = 'D'.repeat(64), H2 = 'E'.repeat(64);
+  const asked = [];
+  globalThis.fetch = async (url, opts) => {
+    const b = JSON.parse(opts.body);
+    if (b.action === 'account_info') return { ok: true, json: async () => ({ error: 'Account not found', balance: '0' }) };
+    if (b.action === 'receivable') { asked.push(b); return { ok: true, json: async () => ({ blocks: { [H1]: '1', [H2]: '41' } }) }; }
+    return { ok: true, json: async () => ({ error: 'unexpected rpc ' + b.action }) };
+  };
+  const r = await get('/v1/account_info?account=' + UNOPENED);
+  assert.equal(r.status, 200);
+  assert.equal(asked[0].source, 'true', 'the flag is what makes the node answer objects instead of amount strings');
+  assert.equal(r.body.receivable_raw, '42', 'both sends count, whichever shape the node answers');
+  assert.equal(r.body.receivable_count, 2);
 });
 
 test('a node that cannot be asked is a 502 that says the figures are unknown, not zero', async () => {

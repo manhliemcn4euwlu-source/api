@@ -1002,10 +1002,13 @@ async function accountInfo(req, res, u) {
     // the receivable action, so this branch asks that action rather than leaving the field out (same 1-raw send, 2026-10-23).
     let receivable_raw = null, receivable_count = null, receivable_truncated;
     try {
-      const rr = await rpc({ action: 'receivable', account, count: String(RECEIVABLE_MAX), include_only_confirmed: 'true', threshold: '1' });
+      // `source: 'true'` is what makes the node answer blocks as objects; without it the same field is a map of hash to an
+      // amount string, so `v.amount` is undefined and BigInt() throws into the catch below, which published null on a real node
+      // (pursekeeper, 2026-10-24 01:40). Both shapes are read here so the branch does not depend on which one answers.
+      const rr = await rpc({ action: 'receivable', account, count: String(RECEIVABLE_MAX), source: 'true', include_only_confirmed: 'true', threshold: '1' });
       if (rr && !rr.error && rr.blocks && typeof rr.blocks === 'object') {
         receivable_count = Object.keys(rr.blocks).length;
-        receivable_raw = Object.values(rr.blocks).reduce((a, v) => a + BigInt(v.amount), 0n).toString();
+        receivable_raw = Object.values(rr.blocks).reduce((a, v) => a + BigInt(v && typeof v === 'object' ? v.amount : v), 0n).toString();
         receivable_truncated = receivable_count >= RECEIVABLE_MAX;
       }
     } catch { /* node unavailable: the field stays null, which says it was not read, not that it is zero */ }
