@@ -334,6 +334,11 @@ async function isKnownPayerFrontier(hash) {
 // Every first-credit initialisation for a hash runs under that hash's lock, whoever asks. The 12:25 UTC fix locked only
 // charge(), and GET /v1/credit still called the unlocked body: a status read racing a first paid call could finish after
 // the debit and write the full block amount back, restoring spent credit (Ops Control HQ, 2026-09-27, from the source).
+function facilitatorSeen(h) {
+  h = String(h || '').toUpperCase();
+  return facilitator.broadcast.has(h) || Boolean(facilitator.settledPayTo(h));
+}
+
 async function creditFor(hash) {
   if (!/^[0-9A-F]{64}$/i.test(hash)) return { error: 'bad hash' };
   return withHashLock(hash.toUpperCase(), () => creditForUnlocked(hash));
@@ -345,8 +350,14 @@ async function creditForUnlocked(hash) {
   // A block this server broadcast for an x402 payment and answered 402 for is its payer's, not bearer credit: it is served
   // only to the re-presentation carrying the X-Nano-Represent token from that 402 (see REPRESENT; pyfile-toolkit, 2026-09-29).
   if (represent[hash]) return { error: 'this block was broadcast through this server for an x402 payment and is waiting for its payer to re-present the same PAYMENT-SIGNATURE with the X-Nano-Represent token from that 402; it is not spendable as X-Nano-Payment credit' };
+  if (facilitatorSeen(hash)) {
+    if (hash in credits && credits[hash] !== '0') { credits[hash] = '0'; save(); }
+    return { error: 'this block was broadcast or settled through the x402 facilitator and is not spendable as X-Nano-Payment credit' };
+  }
   if (!purposeRegOk) return { error: 'the list of sends that are not API credit could not be loaded; bearer credit is refused until it is, retry shortly (x402 payments are unaffected)' };
   if (hash in credits) {
+    const hashReason = purposeReg.hashes.get(hash);
+    if (hashReason) { noCredit.set(hash, hashReason); if (credits[hash] !== '0') { credits[hash] = '0'; save(); } return { error: hashReason }; }
     if (!creditAccounts[hash] && credits[hash] !== '0') {   // stored before accounts were kept: look it up now rather than trust the reload to have finished
       try { const b = await rpc({ action: 'block_info', json_block: 'true', hash }); if (b && b.block_account) { creditAccounts[hash] = b.block_account; saveCreditAccounts(); } } catch { /* node unavailable */ }
       if (!creditAccounts[hash]) return { error: 'credit source not verifiable right now; retry shortly' };
@@ -608,14 +619,24 @@ async function confirmedWithin(hash) {
   }
 }
 async function chargeX402Locked(req, res, payload, key) {
+  let landedBlock = null;
+  const rawAcct = String(payload && payload.payload && payload.payload.block && payload.payload.block.account || '').replace(/^xrb_/, 'nano_');
   const v = await x402.verify(payload, X402_REQ, {
     accountInfo: account => rpc({ action: 'account_info', account, representative: 'true', include_confirmed: 'true' }),
     // A hash this server already ruled is not API credit (noCredit: a checkout share, a stake, an own move, a donation, an
     // expired represent record) paid for something else whoever presents it; a landed block reaches verify's alreadyLanded
     // branch, so without this check anyone could wrap that public block in a PAYMENT-SIGNATURE and be served on it.
-    seen: async h => (h in credits) || settling.has(h) || (noCredit.has(h) ? noCredit.get(h) : false),
+    seen: async h => {
+      if ((h in credits) || settling.has(h)) return true;
+      if (noCredit.has(h)) return noCredit.get(h);
+      if (facilitatorSeen(h)) return 'this block was already broadcast or settled through the x402 facilitator';
+      if (feeSend.get(h) === true) { noCredit.set(h, NO_CREDIT_REASON); return NO_CREDIT_REASON; }
+      const pr = purposeReg.hashes.get(h) || (rawAcct && purposeReg.accounts.get(rawAcct));
+      if (pr) { noCredit.set(h, pr); return pr; }
+      return false;
+    },
     reference: x402Reference,
-    blockInfo: h => rpc({ action: 'block_info', json_block: 'true', hash: h }),   // amount and confirmation of a block that already landed (alreadyLanded)
+    blockInfo: async h => { const b = await rpc({ action: 'block_info', json_block: 'true', hash: h }); landedBlock = b; return b; },   // amount and confirmation of a block that already landed (alreadyLanded)
     workGenerate: async hash => (await workFor(hash, { paid: true })).work   // a paying block earns its work
   });
   if (!v.ok) {
@@ -646,6 +667,14 @@ async function chargeX402Locked(req, res, payload, key) {
   // (hashlock.js) and runs after this serve, when block_info finds the block (2026-09-29).
   settling.add(v.hash);
   try {
+    const acctReason = purposeReg.accounts.get(v.payer);
+    if (acctReason) {
+      noCredit.set(v.hash, acctReason);
+      return paymentRequired(res, 'x402: ' + acctReason, req), false;
+    }
+    if (v.alreadyLanded && landedBlock && landedBlock.local_timestamp !== undefined && Number(landedBlock.local_timestamp) < NOT_BEFORE) {
+      return paymentRequired(res, 'x402: block predates this service', req), false;
+    }
     // A landed block this server broadcast and answered 402 for is served only to its payer: the token from that 402 (see
     // REPRESENT). Refused here nothing is marked spent, so the payer's own re-presentation still works.
     const rep = v.alreadyLanded ? represent[v.hash] : null;
@@ -1411,7 +1440,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return send(res, 204, '');
     if (await site.handle(req, res, u, send)) return;
     if (await cohorts.handle(req, res, u, send)) return;
-    if (await facilitator.handle(req, res, u, send, { rpc, settling, logReq: entry => logReq(req, entry) })) return;
+    if (await facilitator.handle(req, res, u, send, { rpc, settling, logReq: entry => logReq(req, entry), sellerSeen: h => (h in credits) || noCredit.has(h) || Boolean(represent[h]) })) return;
     if (u.pathname === '/' || u.pathname === '/api') return send(res, 200, DOCS, 'text/plain');
     if (u.pathname.startsWith('/examples/')) {
       const root = path.join(__dirname, 'examples');

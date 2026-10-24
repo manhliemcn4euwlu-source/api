@@ -166,7 +166,7 @@ async function verifyRequestInner(body, deps) {
       // documented node_unavailable instead, the same wording the account_info read uses.
       let b;
       try { b = await deps.rpc({ action: 'block_info', json_block: 'true', hash: h }); } catch (e) { return 'node rpc failed: ' + e.message; }
-      if (!(b && !b.error && b.block_account)) return false;
+      if (!(b && !b.error && b.block_account)) return !!(deps.sellerSeen && deps.sellerSeen(h));
       // Check 10 of the scheme document (kilkelly's draft of 2026-10-13, x402#3432): a block the chain already holds is
       // compared on subtype and amount before it is called a replay, so a confirmed 1-raw send presented at the full
       // price is amount_mismatch (transaction stays empty), not block_already_exists.
