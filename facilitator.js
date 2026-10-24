@@ -157,7 +157,11 @@ async function verifyRequestInner(body, deps) {
       if (settling.has(h)) return true;
       const own = ownBroadcast(h, req);
       if (own) return !!own.answered;
-      const b = await deps.rpc({ action: 'block_info', json_block: 'true', hash: h });
+      // The first node call of /verify and /settle: a node that is down, times out or answers a non-2xx page throws here, and
+      // unwrapped that left verify through its outer catch as "verify error: ..." and the code invalid_payment. Named as the
+      // documented node_unavailable instead, the same wording the account_info read uses.
+      let b;
+      try { b = await deps.rpc({ action: 'block_info', json_block: 'true', hash: h }); } catch (e) { return 'node rpc failed: ' + e.message; }
       if (!(b && !b.error && b.block_account)) return false;
       // Check 10 of the scheme document (kilkelly's draft of 2026-10-13, x402#3432): a block the chain already holds is
       // compared on subtype and amount before it is called a replay, so a confirmed 1-raw send presented at the full
