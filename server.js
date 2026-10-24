@@ -570,7 +570,11 @@ function saveRepresent() {
 // is bound the same way: the 400/502 that hands it back carries a token, and the credit is spent only with that token.
 const HANDBACK = path.join(__dirname, 'data', 'handback.json');
 let handback = {};   // hash -> { token, at }
-{ const r = readJsonStore(HANDBACK); if (r.damaged) console.error('handback: ' + HANDBACK + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on')); if (r.value && typeof r.value === 'object') handback = r.value; }
+{ const r = readJsonStore(HANDBACK); if (r.damaged) console.error('handback: ' + HANDBACK + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on')); if (r.value && typeof r.value === 'object') handback = r.value;
+  // A record whose hash holds no credit binds nothing: it is dropped at boot so the file stays the size of the open hand-backs.
+  // A later hand-back on the same hash needs a new charge, and a charge on an x402 hash needs credit, so nothing is reopened.
+  let pruned = 0; for (const h of Object.keys(handback)) if (!(BigInt((credits[h] || '0')) > 0n)) { delete handback[h]; pruned++; }
+  if (pruned) { try { writeJsonAtomic(HANDBACK, handback); } catch {} } }
 const saveHandback = () => { try { writeJsonAtomic(HANDBACK, handback); } catch {} };
 // Restore the price on hash h under its lock; for an x402 charge, bind the credit to a token. Returns { left, token }.
 async function handBack(h, res) {
@@ -1297,7 +1301,8 @@ x402
   back as a redirect that could not be followed; any complete HTTP response from the
   target, whatever its status, is billable), when the price
   goes on the block's hash as X-Nano-Payment credit and the
-  400 or 502 body names the full hash to retry with. Work is optional here: the requirements carry
+  400 or 502 body names the full hash to retry with and, for an x402 payment, an X-Nano-Represent token
+  the restored credit can only be spent with, since the block is public on the chain (2026-10-24). Work is optional here: the requirements carry
   extra.work = "optional", so send work "0" (the advertised form; omitting the field
   is accepted too) and this server computes it before broadcasting; if you include
   real work it must be valid at the send threshold. Other

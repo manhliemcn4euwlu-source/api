@@ -84,7 +84,7 @@ a name that does not resolve is not a 502: the first URL is refused with 400 bef
 and a later redirect hop is handed back with 400 as a redirect that could not be followed; any
 complete HTTP response from the target, whatever its status, is billable),
 the price goes back on the settled block's hash as `X-Nano-Payment` credit and the 400 or 502
-body names the full hash to retry with (since 2026-09-27 16:41 UTC for `/v1/fetch` redirects;
+body names the full hash to retry with, plus, for an x402 payment, an `X-Nano-Represent` token in the body and the `x-nano-represent` header without which the restored credit cannot be spent, because the block is public on the chain and until 2026-10-24 whoever presented its hash first was served on it (PlatinumVera, item 4) (since 2026-09-27 16:41 UTC for `/v1/fetch` redirects;
 this sentence lagged that change until 2026-09-28, uknwplayer, item 5, named only that route
 until 2026-09-28, PlatinumVera, and left the buyer charged for a target that never answered
 until 2026-09-29, Ops Control HQ, 2026-09-28 22:23 UTC).
