@@ -155,23 +155,39 @@ async function broadcast(block, subtype) {
 
   if (cmd === 'receive') {
     if (!pend.blocks.length) return console.error('nothing to receive');
-    if (pend.blocks.length > 6) console.error(pend.blocks.length + ' pending sends need ' + pend.blocks.length + ' work calls; about ' + Math.ceil(pend.blocks.length / 6) + ' min at the free rate of 6/min (pay per work to skip the wait)');
-    for (const b of pend.blocks) {
-      // Skip a send that a concurrent receive already pocketed (seen after a retry). Only a positive "no longer listed"
-      // skips it: a re-read that fails (an error body, no blocks array) is said on stderr and the send is still tried,
-      // since the node refuses a receive whose source is already pocketed and publish() handles that answer.
-      const still = await get('/v1/receivable?account=' + account);
-      if (!Array.isArray(still.blocks)) console.error('could not re-read receivable (' + (still.error || 'no blocks field') + '); trying ' + b.hash.slice(0, 8) + ' anyway');
-      else if (!still.blocks.some(x => x.hash === b.hash)) { console.error('already received ' + b.hash.slice(0, 8) + ', skipping'); continue; }
-      let kind;
-      const hash = await publish(
-        () => ({ type: 'state', account, previous, representative: rep, balance: (balance + BigInt(b.amount_raw)).toString(), link: b.hash, work: null }),
-        blk => (kind = blk.previous === '0'.repeat(64) ? 'open' : 'receive'),
-        async () => { const s = await get('/v1/receivable?account=' + account); return !Array.isArray(s.blocks) || s.blocks.some(x => x.hash === b.hash); });
-      if (!hash) { console.error('already received ' + b.hash.slice(0, 8) + ' during the retry, skipping'); continue; }
-      console.log(kind + ' ' + fmt(b.amount_raw) + ' from ' + b.from + ' -> ' + hash);
+    // /v1/receivable lists at most the node's bound per call (100 on pursekeeper.dev) and says so with truncated: true and
+    // "pocket these, then poll again for the rest". Until now one page was pocketed and the command exited 0, so an
+    // account with more unpocketed sends than the bound kept the rest with no word that they exist. Pages are now read
+    // until one is not truncated, or one lists nothing this run has not already handled.
+    const done = new Set();
+    let page = pend;
+    for (;;) {
+      const todo = page.blocks.filter(b => !done.has(b.hash));
+      if (todo.length > 6) console.error(todo.length + ' pending sends need ' + todo.length + ' work calls; about ' + Math.ceil(todo.length / 6) + ' min at the free rate of 6/min (pay per work to skip the wait)');
+      for (const b of todo) {
+        done.add(b.hash);
+        // Skip a send that a concurrent receive already pocketed (seen after a retry). Only a positive "no longer listed"
+        // skips it: a re-read that fails (an error body, no blocks array) is said on stderr and the send is still tried,
+        // since the node refuses a receive whose source is already pocketed and publish() handles that answer.
+        const still = await get('/v1/receivable?account=' + account);
+        if (!Array.isArray(still.blocks)) console.error('could not re-read receivable (' + (still.error || 'no blocks field') + '); trying ' + b.hash.slice(0, 8) + ' anyway');
+        else if (!still.blocks.some(x => x.hash === b.hash)) { console.error('already received ' + b.hash.slice(0, 8) + ', skipping'); continue; }
+        let kind;
+        const hash = await publish(
+          () => ({ type: 'state', account, previous, representative: rep, balance: (balance + BigInt(b.amount_raw)).toString(), link: b.hash, work: null }),
+          blk => (kind = blk.previous === '0'.repeat(64) ? 'open' : 'receive'),
+          async () => { const s = await get('/v1/receivable?account=' + account); return !Array.isArray(s.blocks) || s.blocks.some(x => x.hash === b.hash); });
+        if (!hash) { console.error('already received ' + b.hash.slice(0, 8) + ' during the retry, skipping'); continue; }
+        console.log(kind + ' ' + fmt(b.amount_raw) + ' from ' + b.from + ' -> ' + hash);
+      }
+      if (!page.truncated) return;
+      page = await get('/v1/receivable?account=' + account);
+      if (!Array.isArray(page.blocks)) throw new Error('receivable: the last page was truncated and the next read failed (' + (page.error || 'no blocks field') + '); run receive again for the rest');
+      if (!page.blocks.some(b => !done.has(b.hash))) {
+        if (page.truncated) console.error('receivable still answers truncated but lists nothing this run has not handled; run receive again for the rest');
+        return;
+      }
     }
-    return;
   }
 
   if (cmd === 'send') {
