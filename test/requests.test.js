@@ -84,6 +84,10 @@ const BIG_H = 'B'.repeat(64);
 test('a hash with more than 5,000 entries can be read in full, exactly once each, by cursor', async () => {
   const before = fs.existsSync(REQ_LOG) ? fs.readFileSync(REQ_LOG) : null;
   try {
+    // Start from an empty log: the copied live log can already hold entries, and on a box that has them the walk below
+    // starts from a different total (pursekeeper, 2026-10-24 01:40: the copy it tested against had six entries). The same
+    // shape c0d8f7d gave the paging case: empty inside the save-and-restore.
+    fs.writeFileSync(REQ_LOG, '');
     const N = 5001;
     // One append per entry, through the log's own path, so the paging reads what a real log holds.
     for (let i = 0; i < N; i++) logReq(req, { kind: 'process', hash: null, previous: BIG_H, seq: i, ok: false, error: 'x' });
