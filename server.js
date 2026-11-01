@@ -681,6 +681,7 @@ async function chargeX402Locked(req, res, payload, key) {
     workGenerate: async hash => (await workFor(hash, { paid: true })).work   // a paying block earns its work
   });
   if (!v.ok) {
+    logRefusedX402(req, key, payload, v.payer, v.reason);
     // A re-presentation that arrives while the broadcast block is still unconfirmed fails verify's alreadyLanded gate
     // ("on the node but not confirmed yet"), and until 2026-10-03 that 402 carried neither the note nor the token, so the
     // skill's loop stopped on it and the payer was left with a landed block and no token to re-present it with
@@ -734,7 +735,7 @@ async function chargeX402Locked(req, res, payload, key) {
     if (v.alreadyLanded) s = { success: true, network: x402.NETWORK, transaction: v.hash, payer: v.payer };
     else s = await x402.settle(v.block, v.payer, { hash: v.hash, process: block => rpc({ action: 'process', json_block: 'true', subtype: 'send', block }),
       landed: async h => { try { const b = await rpc({ action: 'block_info', json_block: 'true', hash: h }); if (b && b.error) return /not found/i.test(b.error) ? false : null; return b && b.contents ? true : null; } catch { return null; } } });
-    if (!s.success) return paymentRequired(res, 'x402: ' + s.errorReason, req), false;
+    if (!s.success) { logRefusedX402(req, key, payload, v.payer, s.errorReason); return paymentRequired(res, 'x402: ' + s.errorReason, req), false; }
     // The block was broadcast through this server (and its work computed here when work_by is 'seller'): /v1/requests says
     // "absence means pursekeeper.dev was not used for that block", so the request log has to hold it. Until 2026-10-23 only
     // /v1/work and /v1/process wrote it, and a block this server broadcast as an x402 payment answered found:false.
@@ -861,6 +862,24 @@ function ipKey(req) {
 function logReq(req, entry) {
   const line = JSON.stringify({ ts: new Date().toISOString(), ip_key: ipKey(req), ...entry });
   try { fs.appendFileSync(REQ_LOG, line + '\n'); } catch {}
+}
+// A refused x402 presentation leaves a line too: kind x402, ok false, `refused` = the reason the 402 carried. Until
+// 2026-11-01 only accepted presentations were logged, so a payer whose valid signed block was refused (its frontier, an
+// open block 0.3 s old, not yet confirmed) and never broadcast looked, from this log, exactly like a payer who had never
+// presented anything, and was ruled so (ccclosed, api#138, 2026-10-30; the same block landed here two days later). Only
+// payloads that parse to a block (a hash to key the line on) are logged, at most REFUSED_LOG_PER_MIN lines a minute per
+// ip_key so a stranger cannot fill the file with refusals, and the reason is cut to 200 characters.
+const REFUSED_LOG_PER_MIN = 10;
+const refusedLogHits = new Map();
+function logRefusedX402(req, key, payload, payer, reason) {
+  if (!key) return;
+  const k = ipKey(req), now = Date.now();
+  let h = refusedLogHits.get(k);
+  if (!h || now - h.at > 60_000) { if (refusedLogHits.size > 10_000) refusedLogHits.clear(); h = { at: now, n: 0 }; refusedLogHits.set(k, h); }
+  if (++h.n > REFUSED_LOG_PER_MIN) return;
+  let previous = null;
+  try { const p = payload && payload.payload && payload.payload.block && payload.payload.block.previous; if (/^[0-9a-fA-F]{64}$/.test(String(p || ''))) previous = String(p).toUpperCase(); } catch {}
+  logReq(req, { kind: 'x402', hash: key, previous, account: payer || null, ok: false, refused: String(reason || '').slice(0, 200), resource: req.url.split('?')[0] });
 }
 // Entries whose `hash` or `previous` equals H, newest first, at most `limit`. Reads the whole
 // file; fine at the sizes this log sees. Returns [] if the log does not exist yet.
@@ -1548,7 +1567,9 @@ Endpoints
                               extra.work = "optional" is about the x402 payment block inside
                               PAYMENT-SIGNATURE, which this server works for the payer; it says
                               nothing about blocks sent here (2026-10-30).
-  GET  /v1/requests?hash=H   was H (or a block with previous H) worked or broadcast through here? {found, entries}. Free, 60/min
+  GET  /v1/requests?hash=H   was H (or a block with previous H) worked, broadcast, or presented as a payment and
+                              refused here? {found, entries}; a refused presentation is ok:false with the reason in "refused"
+                              (since 2026-11-01). Free, 60/min
   POST /v1/work  {"hash":H}   work_generate at the send threshold for any hash; for a payment
                               block H is your account frontier (the block's previous), never the
                               new block's own hash (pyfile-toolkit, 2026-10-05). Free: 6 per
@@ -1703,7 +1724,7 @@ const server = http.createServer(async (req, res) => {
         truncated: more,
         ...(more ? { next: 'this answer lists entries ' + cursor + ' to ' + (nextCursor - 1) + ' of ' + total + ' for this hash, newest first; pass cursor=' + nextCursor + ' (and the same limit) for the next page' } : {}),
         ...(cursor > 0 ? { note_page: 'entries ' + cursor + ' onward, newest first' } : {}),
-        note: 'every /v1/work and /v1/process call since 2026-09-16, and every block broadcast here for an x402 payment (paid routes and the facilitator) since 2026-10-23, is logged here by hash; absence means pursekeeper.dev was not used for that block' });
+        note: 'every /v1/work and /v1/process call since 2026-09-16, and every block broadcast here for an x402 payment (paid routes and the facilitator) since 2026-10-23, and every x402 payment presentation that parsed to a block and was refused with a 402 since 2026-11-01 (ok:false, refused: the reason), is logged here by hash; absence means pursekeeper.dev was not used for that block' });
     }
     if (u.pathname === '/v1/credit') {
       if (overFreeLimit(req, checkHits.credit, 60, res)) return send(res, 429, { error: 'limit is 60 checks per minute per IP' });
