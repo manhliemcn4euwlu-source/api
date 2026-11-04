@@ -789,7 +789,14 @@ async function workGenerate(req, res) {
   try { body = JSON.parse((await readBody(req, 10_000)).toString('utf8') || '{}'); } catch { return refuseBody('body must be JSON {hash}; nothing charged'); }
   const hash = String(body.hash || '').toUpperCase();
   if (!/^[0-9A-F]{64}$/.test(hash)) return refuseBody('hash must be 64 hex characters (your account frontier); nothing charged');
-  if (workInFlight >= 4) return send(res, 503, { error: 'work server busy; retry in a few seconds; nothing charged' });
+  // A busy refusal is logged too: /v1/requests is the only public record of "was this hash presented here", and
+  // without the line a caller whose valid hash was turned away by a busy server reads exactly like one that never
+  // called, the same gap a refused x402 presentation had before 2026-11-01 (ccclosed, api#138). Logged under the
+  // same per-IP cap as the other refusals so a stranger cannot fill the file.
+  if (workInFlight >= 4) {
+    logRefusedWork(req, hash, paid, 'work server busy: ' + workInFlight + ' calls in flight, at most 4 at a time; nothing charged');
+    return send(res, 503, { error: 'work server busy; retry in a few seconds; nothing charged' });
+  }
   // The slot is taken here, synchronously, before the charge awaits: taken only after charge() returned, five
   // concurrent paid calls all passed the check above and ran at once (tao wang, 2026-09-28). Every return below,
   // charge failed or free limit 402 included, releases it in the finally.
@@ -880,6 +887,17 @@ function logRefusedX402(req, key, payload, payer, reason) {
   let previous = null;
   try { const p = payload && payload.payload && payload.payload.block && payload.payload.block.previous; if (/^[0-9a-fA-F]{64}$/.test(String(p || ''))) previous = String(p).toUpperCase(); } catch {}
   logReq(req, { kind: 'x402', hash: key, previous, account: payer || null, ok: false, refused: String(reason || '').slice(0, 200), resource: req.url.split('?')[0] });
+}
+// A /v1/work call the busy cap turned away leaves a line too, for the reason the x402 refusal above does: the hash
+// was presented here and answered 503, and without the line /v1/requests says it never was. The hash parsed before the
+// cap check, so the line can be keyed on it; the same per-IP budget bounds how much of the file a stranger can fill.
+function logRefusedWork(req, hash, paid, reason) {
+  if (!hash) return;
+  const k = ipKey(req), now = Date.now();
+  let h = refusedLogHits.get(k);
+  if (!h || now - h.at > 60_000) { if (refusedLogHits.size > 10_000) refusedLogHits.clear(); h = { at: now, n: 0 }; refusedLogHits.set(k, h); }
+  if (++h.n > REFUSED_LOG_PER_MIN) return;
+  logReq(req, { kind: 'work', hash, ok: false, paid: Boolean(paid), refused: String(reason || '').slice(0, 200) });
 }
 // Entries whose `hash` or `previous` equals H, newest first, at most `limit`. Reads the whole
 // file; fine at the sizes this log sees. Returns [] if the log does not exist yet.
