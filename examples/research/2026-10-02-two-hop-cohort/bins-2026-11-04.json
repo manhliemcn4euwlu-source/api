@@ -1,0 +1,376 @@
+{
+ "source": "/var/lib/gambit/workspace/api/examples/research/2026-10-02-two-hop-cohort/cohort-2026-11-04.json",
+ "generated_at": "2026-11-04T09:12:58Z",
+ "ledger_max_id": 527,
+ "primary_series": "receipts",
+ "bins": {
+  "2026-W37": {
+   "all": {
+    "receipts": 2,
+    "nano": 0.002,
+    "payers": 2
+   },
+   "route": {
+    "checkout": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    },
+    "direct": {
+     "receipts": 2,
+     "nano": 0.002,
+     "payers": 2
+    }
+   },
+   "funder": {
+    "exchange": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    },
+    "unlisted": {
+     "receipts": 2,
+     "nano": 0.002,
+     "payers": 2
+    },
+    "high-traffic": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    },
+    "none": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "prospective": {
+    "receipts": 0,
+    "nano": 0.0,
+    "payers": 0
+   }
+  },
+  "2026-W38": {
+   "all": {
+    "receipts": 43,
+    "nano": 17.598,
+    "payers": 19
+   },
+   "route": {
+    "checkout": {
+     "receipts": 24,
+     "nano": 17.58,
+     "payers": 17
+    },
+    "direct": {
+     "receipts": 19,
+     "nano": 0.018,
+     "payers": 2
+    }
+   },
+   "funder": {
+    "exchange": {
+     "receipts": 11,
+     "nano": 3.75,
+     "payers": 8
+    },
+    "unlisted": {
+     "receipts": 31,
+     "nano": 13.663,
+     "payers": 10
+    },
+    "high-traffic": {
+     "receipts": 1,
+     "nano": 0.185,
+     "payers": 1
+    },
+    "none": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "prospective": {
+    "receipts": 0,
+    "nano": 0.0,
+    "payers": 0
+   }
+  },
+  "2026-W39": {
+   "all": {
+    "receipts": 25,
+    "nano": 1.58682,
+    "payers": 9
+   },
+   "route": {
+    "checkout": {
+     "receipts": 8,
+     "nano": 1.4125,
+     "payers": 7
+    },
+    "direct": {
+     "receipts": 17,
+     "nano": 0.17432,
+     "payers": 2
+    }
+   },
+   "funder": {
+    "exchange": {
+     "receipts": 5,
+     "nano": 0.39157,
+     "payers": 3
+    },
+    "unlisted": {
+     "receipts": 20,
+     "nano": 1.19525,
+     "payers": 6
+    },
+    "high-traffic": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    },
+    "none": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "prospective": {
+    "receipts": 3,
+    "nano": 0.16032,
+    "payers": 1
+   }
+  },
+  "2026-W40": {
+   "all": {
+    "receipts": 2,
+    "nano": 0.0925,
+    "payers": 2
+   },
+   "route": {
+    "checkout": {
+     "receipts": 2,
+     "nano": 0.0925,
+     "payers": 2
+    },
+    "direct": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "funder": {
+    "exchange": {
+     "receipts": 1,
+     "nano": 0.04625,
+     "payers": 1
+    },
+    "unlisted": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    },
+    "high-traffic": {
+     "receipts": 1,
+     "nano": 0.04625,
+     "payers": 1
+    },
+    "none": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "prospective": {
+    "receipts": 0,
+    "nano": 0.0,
+    "payers": 0
+   }
+  },
+  "2026-W41": {
+   "all": {
+    "receipts": 5,
+    "nano": 0.63025,
+    "payers": 3
+   },
+   "route": {
+    "checkout": {
+     "receipts": 5,
+     "nano": 0.63025,
+     "payers": 3
+    },
+    "direct": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "funder": {
+    "exchange": {
+     "receipts": 1,
+     "nano": 0.2375,
+     "payers": 1
+    },
+    "unlisted": {
+     "receipts": 4,
+     "nano": 0.39275,
+     "payers": 2
+    },
+    "high-traffic": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    },
+    "none": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "prospective": {
+    "receipts": 0,
+    "nano": 0.0,
+    "payers": 0
+   }
+  },
+  "2026-W42": {
+   "all": {
+    "receipts": 6,
+    "nano": 0.70625,
+    "payers": 5
+   },
+   "route": {
+    "checkout": {
+     "receipts": 6,
+     "nano": 0.70625,
+     "payers": 5
+    },
+    "direct": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "funder": {
+    "exchange": {
+     "receipts": 3,
+     "nano": 0.5675,
+     "payers": 2
+    },
+    "unlisted": {
+     "receipts": 2,
+     "nano": 0.0925,
+     "payers": 2
+    },
+    "high-traffic": {
+     "receipts": 1,
+     "nano": 0.04625,
+     "payers": 1
+    },
+    "none": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "prospective": {
+    "receipts": 0,
+    "nano": 0.0,
+    "payers": 0
+   }
+  },
+  "2026-W43": {
+   "all": {
+    "receipts": 8,
+    "nano": 0.52575,
+    "payers": 5
+   },
+   "route": {
+    "checkout": {
+     "receipts": 8,
+     "nano": 0.52575,
+     "payers": 5
+    },
+    "direct": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "funder": {
+    "exchange": {
+     "receipts": 3,
+     "nano": 0.33,
+     "payers": 2
+    },
+    "unlisted": {
+     "receipts": 5,
+     "nano": 0.19575,
+     "payers": 3
+    },
+    "high-traffic": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    },
+    "none": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "prospective": {
+    "receipts": 0,
+    "nano": 0.0,
+    "payers": 0
+   }
+  },
+  "2026-W44": {
+   "all": {
+    "receipts": 8,
+    "nano": 1.1645,
+    "payers": 5
+   },
+   "route": {
+    "checkout": {
+     "receipts": 7,
+     "nano": 1.1635,
+     "payers": 4
+    },
+    "direct": {
+     "receipts": 1,
+     "nano": 0.001,
+     "payers": 1
+    }
+   },
+   "funder": {
+    "exchange": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    },
+    "unlisted": {
+     "receipts": 6,
+     "nano": 0.64325,
+     "payers": 4
+    },
+    "high-traffic": {
+     "receipts": 2,
+     "nano": 0.52125,
+     "payers": 1
+    },
+    "none": {
+     "receipts": 0,
+     "nano": 0.0,
+     "payers": 0
+    }
+   },
+   "prospective": {
+    "receipts": 0,
+    "nano": 0.0,
+    "payers": 0
+   }
+  }
+ }
+}

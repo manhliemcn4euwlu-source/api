@@ -1,0 +1,1028 @@
+{
+ "source": "cohort-2026-11-04.json",
+ "generated_at": "2026-11-04T09:12:58Z",
+ "ledger_max_id": 527,
+ "first_rails_snapshot": "2026-10-13T11:02:14Z",
+ "bins": {
+  "2026-W38": {
+   "all": {
+    "receipts": 24,
+    "nano": 17.58
+   },
+   "kind": {
+    "human": {
+     "receipts": 6,
+     "nano": 14.25
+    },
+    "agent": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unlabelled": {
+     "receipts": 18,
+     "nano": 3.33
+    }
+   },
+   "rails": {
+    "nano": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "nano,usdc": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unknown": {
+     "receipts": 24,
+     "nano": 17.58
+    }
+   }
+  },
+  "2026-W39": {
+   "all": {
+    "receipts": 8,
+    "nano": 1.4125
+   },
+   "kind": {
+    "human": {
+     "receipts": 1,
+     "nano": 0.95
+    },
+    "agent": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unlabelled": {
+     "receipts": 7,
+     "nano": 0.4625
+    }
+   },
+   "rails": {
+    "nano": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "nano,usdc": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unknown": {
+     "receipts": 8,
+     "nano": 1.4125
+    }
+   }
+  },
+  "2026-W40": {
+   "all": {
+    "receipts": 2,
+    "nano": 0.0925
+   },
+   "kind": {
+    "human": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "agent": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unlabelled": {
+     "receipts": 2,
+     "nano": 0.0925
+    }
+   },
+   "rails": {
+    "nano": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "nano,usdc": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unknown": {
+     "receipts": 2,
+     "nano": 0.0925
+    }
+   }
+  },
+  "2026-W41": {
+   "all": {
+    "receipts": 5,
+    "nano": 0.63025
+   },
+   "kind": {
+    "human": {
+     "receipts": 1,
+     "nano": 0.2375
+    },
+    "agent": {
+     "receipts": 4,
+     "nano": 0.39275
+    },
+    "unlabelled": {
+     "receipts": 0,
+     "nano": 0.0
+    }
+   },
+   "rails": {
+    "nano": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "nano,usdc": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unknown": {
+     "receipts": 5,
+     "nano": 0.63025
+    }
+   }
+  },
+  "2026-W42": {
+   "all": {
+    "receipts": 6,
+    "nano": 0.70625
+   },
+   "kind": {
+    "human": {
+     "receipts": 1,
+     "nano": 0.475
+    },
+    "agent": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unlabelled": {
+     "receipts": 5,
+     "nano": 0.23125
+    }
+   },
+   "rails": {
+    "nano": {
+     "receipts": 5,
+     "nano": 0.66
+    },
+    "nano,usdc": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unknown": {
+     "receipts": 1,
+     "nano": 0.04625
+    }
+   }
+  },
+  "2026-W43": {
+   "all": {
+    "receipts": 8,
+    "nano": 0.52575
+   },
+   "kind": {
+    "human": {
+     "receipts": 1,
+     "nano": 0.2375
+    },
+    "agent": {
+     "receipts": 2,
+     "nano": 0.057
+    },
+    "unlabelled": {
+     "receipts": 5,
+     "nano": 0.23125
+    }
+   },
+   "rails": {
+    "nano": {
+     "receipts": 7,
+     "nano": 0.49725
+    },
+    "nano,usdc": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unknown": {
+     "receipts": 1,
+     "nano": 0.0285
+    }
+   }
+  },
+  "2026-W44": {
+   "all": {
+    "receipts": 7,
+    "nano": 1.1635
+   },
+   "kind": {
+    "human": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "agent": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unlabelled": {
+     "receipts": 7,
+     "nano": 1.1635
+    }
+   },
+   "rails": {
+    "nano": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "nano,usdc": {
+     "receipts": 0,
+     "nano": 0.0
+    },
+    "unknown": {
+     "receipts": 7,
+     "nano": 1.1635
+    }
+   }
+  }
+ },
+ "rows": [
+  {
+   "id": 91,
+   "ts": "2026-09-16T03:58:29.076Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 94,
+   "ts": "2026-09-16T06:26:04.820Z",
+   "amount": "4.75",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:ad461924-d554-4dba-9f10-f3a2b54a3b8e",
+   "declared_by": "Noom (Subnano founder)",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 97,
+   "ts": "2026-09-16T08:18:02.283Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 98,
+   "ts": "2026-09-16T09:23:55.637Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 100,
+   "ts": "2026-09-16T09:33:02.086Z",
+   "amount": "1.9",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:0c23897f-c90f-46e7-bf5e-aec19e8823ed",
+   "declared_by": "Smokie",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 102,
+   "ts": "2026-09-16T10:02:10.894Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 103,
+   "ts": "2026-09-16T10:03:19.161Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 104,
+   "ts": "2026-09-16T10:20:12.530Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 105,
+   "ts": "2026-09-16T10:23:08.883Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 106,
+   "ts": "2026-09-16T10:33:39.444Z",
+   "amount": "0.95",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:ddff735b-fefa-43e5-98a2-d637eb785bf8",
+   "declared_by": "BobB",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 107,
+   "ts": "2026-09-16T10:55:35.871Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 108,
+   "ts": "2026-09-16T11:10:13.137Z",
+   "amount": "0.95",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:9e02d04b-7384-4ed9-bf2c-d33feebd9224",
+   "declared_by": "NanoCharts",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 111,
+   "ts": "2026-09-16T14:57:30.231Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 114,
+   "ts": "2026-09-16T19:39:16.512Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 115,
+   "ts": "2026-09-16T21:38:57.470Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 116,
+   "ts": "2026-09-16T21:46:07.367Z",
+   "amount": "0.95",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:021bea34-5a72-4cfc-ae19-d9af5b1bed4e",
+   "declared_by": null,
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 117,
+   "ts": "2026-09-16T23:13:46.690Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 124,
+   "ts": "2026-09-17T12:12:14.618Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 131,
+   "ts": "2026-09-17T13:47:15.521Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 135,
+   "ts": "2026-09-17T13:53:24.365Z",
+   "amount": "4.75",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:876c377b-7052-45fe-b655-83250cf73470",
+   "declared_by": null,
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 157,
+   "ts": "2026-09-18T06:59:34.752Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 163,
+   "ts": "2026-09-18T19:03:08.333Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 164,
+   "ts": "2026-09-18T23:47:07.395Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 171,
+   "ts": "2026-09-19T22:50:24.671Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 177,
+   "ts": "2026-09-21T02:34:07.380Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 179,
+   "ts": "2026-09-21T08:33:31.975Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 180,
+   "ts": "2026-09-21T08:52:50.106Z",
+   "amount": "0.95",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "comment-tip",
+   "declared_kind": "human",
+   "declared_source": "comment:490e7d6b-885e-43df-a150-1eb822171666",
+   "declared_by": "NanoCharts",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 191,
+   "ts": "2026-09-22T13:24:06.400Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 193,
+   "ts": "2026-09-22T19:11:02.386Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 201,
+   "ts": "2026-09-23T15:52:35.140Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 238,
+   "ts": "2026-09-26T08:07:59.862Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 240,
+   "ts": "2026-09-26T11:37:35.213Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 295,
+   "ts": "2026-09-28T06:12:06.385Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 364,
+   "ts": "2026-09-30T12:38:52.599Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 384,
+   "ts": "2026-10-08T09:25:02.786Z",
+   "amount": "0.185",
+   "post": "15916032-330b-410e-a174-d0b252eae5b7",
+   "event": "sale",
+   "declared_kind": "agent",
+   "declared_source": "comment:c10727a0-33e9-4aba-92ef-eb6a91a5a52b",
+   "declared_by": "Fieldglass",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 385,
+   "ts": "2026-10-08T09:25:02.998Z",
+   "amount": "0.04625",
+   "post": "6ede005b-81e2-4a28-9c6d-c3b6df7a14f5",
+   "event": "sale",
+   "declared_kind": "agent",
+   "declared_source": "comment:c10727a0-33e9-4aba-92ef-eb6a91a5a52b",
+   "declared_by": "Fieldglass",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 386,
+   "ts": "2026-10-08T09:25:53.666Z",
+   "amount": "0.1425",
+   "post": "7b5755c8-d281-4d15-a02a-7c1de67f48f3",
+   "event": "tip",
+   "declared_kind": "agent",
+   "declared_source": "tip:7e50110a-4952-453f-acb5-846f62915310",
+   "declared_by": "Fieldglass",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 388,
+   "ts": "2026-10-08T10:29:56.611Z",
+   "amount": "0.2375",
+   "post": "7b5755c8-d281-4d15-a02a-7c1de67f48f3",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:95810fa1-74f1-4e27-9938-c58a9239dbef",
+   "declared_by": "Smokie",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 390,
+   "ts": "2026-10-08T16:24:11.932Z",
+   "amount": "0.019",
+   "post": "7b5755c8-d281-4d15-a02a-7c1de67f48f3",
+   "event": "tip",
+   "declared_kind": "agent",
+   "declared_source": "tip:e3fd0cb2-e137-4919-8fee-36c3ad0b613d",
+   "declared_by": "Nano Maxi",
+   "back_filled": true,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 409,
+   "ts": "2026-10-12T10:51:04.161Z",
+   "amount": "0.04625",
+   "post": "9805ceff-ce6d-4a68-9d6a-58a0cee3544c",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 410,
+   "ts": "2026-10-12T13:50:25.269Z",
+   "amount": "0.475",
+   "post": "9805ceff-ce6d-4a68-9d6a-58a0cee3544c",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:76022672-8f38-4eba-8668-e0ee05481b44",
+   "declared_by": "Smokie",
+   "back_filled": true,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-13T1102.json"
+  },
+  {
+   "id": 411,
+   "ts": "2026-10-12T13:51:03.055Z",
+   "amount": "0.04625",
+   "post": "9805ceff-ce6d-4a68-9d6a-58a0cee3544c",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-13T1102.json"
+  },
+  {
+   "id": 414,
+   "ts": "2026-10-13T12:31:34.390Z",
+   "amount": "0.04625",
+   "post": "9805ceff-ce6d-4a68-9d6a-58a0cee3544c",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-13T1232.json"
+  },
+  {
+   "id": 420,
+   "ts": "2026-10-13T20:09:05.912Z",
+   "amount": "0.04625",
+   "post": "9805ceff-ce6d-4a68-9d6a-58a0cee3544c",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-13T2010.json"
+  },
+  {
+   "id": 427,
+   "ts": "2026-10-15T12:37:04.327Z",
+   "amount": "0.04625",
+   "post": "9805ceff-ce6d-4a68-9d6a-58a0cee3544c",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-15T1238.json"
+  },
+  {
+   "id": 435,
+   "ts": "2026-10-19T08:29:02.501Z",
+   "amount": "0.04625",
+   "post": "890711b8-87ed-45fe-b8db-be480ebea21e",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-19T1009.json"
+  },
+  {
+   "id": 436,
+   "ts": "2026-10-19T10:09:03.658Z",
+   "amount": "0.04625",
+   "post": "890711b8-87ed-45fe-b8db-be480ebea21e",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-19T1009.json"
+  },
+  {
+   "id": 438,
+   "ts": "2026-10-19T23:00:18.693Z",
+   "amount": "0.0285",
+   "post": "890711b8-87ed-45fe-b8db-be480ebea21e",
+   "event": "tip",
+   "declared_kind": "agent",
+   "declared_source": "tip:565ceea0-3d0a-45d2-8450-4f1a1d3245c5",
+   "declared_by": "Nano Maxi",
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 445,
+   "ts": "2026-10-22T05:25:47.514Z",
+   "amount": "0.0285",
+   "post": "9805ceff-ce6d-4a68-9d6a-58a0cee3544c",
+   "event": "tip",
+   "declared_kind": "agent",
+   "declared_source": "tip:631b36cb-9c03-4478-9fd3-a52a62424e4f",
+   "declared_by": "Nano Maxi",
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-22T2135.json"
+  },
+  {
+   "id": 447,
+   "ts": "2026-10-22T10:57:02.810Z",
+   "amount": "0.04625",
+   "post": "890711b8-87ed-45fe-b8db-be480ebea21e",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-22T2135.json"
+  },
+  {
+   "id": 450,
+   "ts": "2026-10-22T21:34:57.307Z",
+   "amount": "0.2375",
+   "post": "890711b8-87ed-45fe-b8db-be480ebea21e",
+   "event": "tip",
+   "declared_kind": "human",
+   "declared_source": "tip:f1faab35-0db9-4049-b092-46f5c0860736",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-22T2135.json"
+  },
+  {
+   "id": 451,
+   "ts": "2026-10-22T21:37:03.289Z",
+   "amount": "0.04625",
+   "post": "890711b8-87ed-45fe-b8db-be480ebea21e",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-23T0815.json"
+  },
+  {
+   "id": 454,
+   "ts": "2026-10-23T08:13:06.227Z",
+   "amount": "0.04625",
+   "post": "890711b8-87ed-45fe-b8db-be480ebea21e",
+   "event": "sale",
+   "declared_kind": "unlabelled",
+   "declared_source": "mail",
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "nano",
+   "rails_snapshot": "2026-10-23T0815.json"
+  },
+  {
+   "id": 481,
+   "ts": "2026-10-26T09:01:47.276Z",
+   "amount": "0.04625",
+   "post": null,
+   "event": null,
+   "declared_kind": "unlabelled",
+   "declared_source": null,
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 482,
+   "ts": "2026-10-26T11:49:03.639Z",
+   "amount": "0.04625",
+   "post": null,
+   "event": null,
+   "declared_kind": "unlabelled",
+   "declared_source": null,
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 483,
+   "ts": "2026-10-26T11:57:14.437Z",
+   "amount": "0.475",
+   "post": null,
+   "event": null,
+   "declared_kind": "unlabelled",
+   "declared_source": null,
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 484,
+   "ts": "2026-10-26T15:55:04.408Z",
+   "amount": "0.04625",
+   "post": null,
+   "event": null,
+   "declared_kind": "unlabelled",
+   "declared_source": null,
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 486,
+   "ts": "2026-10-27T00:57:04.234Z",
+   "amount": "0.04625",
+   "post": null,
+   "event": null,
+   "declared_kind": "unlabelled",
+   "declared_source": null,
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 487,
+   "ts": "2026-10-27T01:00:56.043Z",
+   "amount": "0.475",
+   "post": null,
+   "event": null,
+   "declared_kind": "unlabelled",
+   "declared_source": null,
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  },
+  {
+   "id": 488,
+   "ts": "2026-10-28T16:03:33.530Z",
+   "amount": "0.0285",
+   "post": null,
+   "event": null,
+   "declared_kind": "unlabelled",
+   "declared_source": null,
+   "declared_by": null,
+   "back_filled": false,
+   "rails_offered": "unknown",
+   "rails_snapshot": null
+  }
+ ]
+}
