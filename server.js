@@ -1431,7 +1431,11 @@ function readBody(req, limit = 1_000_000) {
 // as such. An x402 reply is never handed to a bearer presentation, nor a bearer reply to an x402 one.
 const REPLAY_TTL_MS = 10 * 60_000;
 const SERVED_FILE = process.env.SERVED_FILE || (process.env.NODE_TEST_CONTEXT ? null : path.join(__dirname, 'data', 'served.json'));
-const served = new Map();   // hash -> { key, code, body, type, headers, at, bind: { secret } | { bearer: true } }
+// hash -> Map<call key, { key, code, body, type, headers, at, bind: { secret } | { bearer: true } }>
+// One send can cover many calls (max 1 NANO per hash), so one hash can buy several different replies. Keying the cache by
+// the hash alone kept only the last of them: a payer who re-presented an earlier call inside the ten minutes was told the
+// credit was used up, with the money on chain and that reply no longer anywhere (llmrt, 2026-11-04, from the source).
+const served = new Map();
 // Loaded before the first request: a reply this process did not serve itself is still a reply it promised to give again.
 // Entries past the ten minutes are dropped here rather than at the first re-presentation, so a long-lived file cannot grow
 // into an archive of everything ever sold. A damaged file is named at boot and read as empty: the money is in credits.json,
@@ -1440,36 +1444,52 @@ if (SERVED_FILE) {
   const r = readJsonStore(SERVED_FILE);
   if (r.damaged) console.error('served: ' + SERVED_FILE + ' is damaged (' + r.error + ')' + (r.recovered ? '; recovered the last complete copy from .bak' : '; no complete copy to fall back on'));
   const now = Date.now();
-  for (const [h, s] of Object.entries(r.value && typeof r.value === 'object' && !Array.isArray(r.value) ? r.value : {})) {
-    if (!/^[0-9A-F]{64}$/i.test(h) || !s || typeof s !== 'object') continue;
-    if (typeof s.key !== 'string' || typeof s.body !== 'string' || typeof s.at !== 'number') continue;
-    if (now - s.at > REPLAY_TTL_MS) continue;
-    served.set(h.toUpperCase(), { key: s.key, code: s.code, body: s.body, type: s.type || 'application/json', headers: s.headers || {}, at: s.at, bind: s.bind && typeof s.bind === 'object' ? s.bind : {} });
+  for (const [h, v] of Object.entries(r.value && typeof r.value === 'object' && !Array.isArray(r.value) ? r.value : {})) {
+    if (!/^[0-9A-F]{64}$/i.test(h) || !v || typeof v !== 'object') continue;
+    // A file written before the cache was keyed by call holds the entry itself; the same entry under its own key.
+    const byKey = typeof v.body === 'string' ? { [v.key]: v } : v;
+    for (const s of Object.values(byKey)) {
+      if (!s || typeof s !== 'object') continue;
+      if (typeof s.key !== 'string' || typeof s.body !== 'string' || typeof s.at !== 'number') continue;
+      if (now - s.at > REPLAY_TTL_MS) continue;
+      if (!served.has(h.toUpperCase())) served.set(h.toUpperCase(), new Map());
+      served.get(h.toUpperCase()).set(s.key, { key: s.key, code: s.code, body: s.body, type: s.type || 'application/json', headers: s.headers || {}, at: s.at, bind: s.bind && typeof s.bind === 'object' ? s.bind : {} });
+    }
   }
 }
 function saveServed() {
   if (!SERVED_FILE) return;
-  try { writeJsonAtomic(SERVED_FILE, Object.fromEntries(served)); } catch {}
+  try { writeJsonAtomic(SERVED_FILE, Object.fromEntries([...served].map(([h, m]) => [h, Object.fromEntries(m)]))); } catch {}
 }
 // Pruned once a minute as well (added at the merge, 2026-10-25): entries were otherwise dropped only when the next paid
 // call landed or the process booted, and with paid calls rare the file would hold replies and their session binding long
 // past the ten minutes the page promises. The file is rewritten only when something was dropped.
 if (SERVED_FILE) setInterval(() => {
   const now = Date.now(); let dropped = false;
-  for (const [h, s] of served) if (now - s.at > REPLAY_TTL_MS) { served.delete(h); dropped = true; }
+  for (const [h, m] of served) {
+    for (const [k, s] of m) if (now - s.at > REPLAY_TTL_MS) { m.delete(k); dropped = true; }
+    if (m.size === 0) served.delete(h);
+  }
   if (dropped) saveServed();
 }, 60_000).unref();
 function replayKey(req) { return req.method + ' ' + req.url + ' ' + crypto.createHash('sha256').update(req.bodyBuffer || '').digest('hex'); }
 function rememberServed(hash, key, code, body, type, headers, bind) {
   const now = Date.now();
-  for (const [h, s] of served) if (now - s.at > REPLAY_TTL_MS) served.delete(h);
-  if (served.size > 5_000) served.clear();
-  served.set(hash, { key, code, body, type, headers, at: now, bind: bind || {} });
+  let entries = 0;
+  for (const [h, m] of served) {
+    for (const [k, s] of m) if (now - s.at > REPLAY_TTL_MS) m.delete(k);
+    if (m.size === 0) served.delete(h); else entries += m.size;
+  }
+  if (entries > 5_000) served.clear();
+  const h = String(hash).toUpperCase();
+  if (!served.has(h)) served.set(h, new Map());
+  served.get(h).set(key, { key, code, body, type, headers, at: now, bind: bind || {} });
   saveServed();
 }
 function replayIfServed(req, res, hash, bind) {
-  const s = served.get(String(hash || '').toUpperCase());
-  if (!s || Date.now() - s.at > REPLAY_TTL_MS || s.key !== replayKey(req)) return false;
+  const key = replayKey(req);
+  const s = served.get(String(hash || '').toUpperCase())?.get(key);
+  if (!s || Date.now() - s.at > REPLAY_TTL_MS) return false;
   if (!bind) return false;
   if (s.bind.bearer || bind.bearer) { if (!s.bind.bearer || !bind.bearer) return false; }
   else if (s.bind.secret && bind.secret !== s.bind.secret) return false;   // echoed a session: only that session; none: key alone

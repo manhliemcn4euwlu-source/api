@@ -77,7 +77,10 @@ test('a reply kept for a lost reply survives a restart: the same payment re-pres
   first.send(r1, 200, { echo: 'lost', at: '2026-10-23T20:00:00.000Z' });
   const kept = JSON.parse(fs.readFileSync(SERVED, 'utf8'));
   assert.ok(kept[hash], 'the reply the block bought is on disk, keyed by the block hash');
-  assert.equal(kept[hash].code, 200);
+  // One hash can buy several calls, so the file holds a map per hash: the call key under it, the reply under that.
+  const one = Object.values(kept[hash]);
+  assert.equal(one.length, 1, 'one call was served on this block');
+  assert.equal(one[0].code, 200);
 
   // The service restarts: a new module instance over the same data directory, so credits.json already has the hash at
   // zero and the in-process Map is empty. The buyer re-presents the same payment because the 200 never arrived.
