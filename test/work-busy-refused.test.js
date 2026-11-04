@@ -23,21 +23,26 @@ const lines = () => reqLog.split('\n').filter(Boolean).map(l => JSON.parse(l));
 // The cap check reads the module-level workInFlight counter, which workFor()'s own await keeps raised. Only the node
 // RPC is held open here (the server's own fetch to NANO_RPC); the test's HTTP calls use node:http directly, so holding
 // the node never blocks the client. globalThis.fetch is restored before the test's own requests run.
+//
+// Every held call gets its own resolver: one shared `release` (the first version) answered only the last promise, so
+// three of the four held /v1/work requests never settled, their client sockets stayed open, and server.close() waited
+// on them forever (pursekeeper, api#139 review, 2026-11-04).
 const realFetch = globalThis.fetch;
-let release;
+const releases = [];
 const holdNode = () => {
   globalThis.fetch = (url, ...a) => String(url) === process.env.NANO_RPC
-    ? new Promise(resolve => { release = () => resolve({ ok: true, json: async () => ({ work: '00'.repeat(8) }) }); })
+    ? new Promise(resolve => { releases.push(() => resolve({ ok: true, json: async () => ({ work: '00'.repeat(8) }) })); })
     : realFetch(url, ...a);
 };
-after(() => { if (release) release(); globalThis.fetch = realFetch; });
+const releaseAll = () => { while (releases.length) releases.pop()(); };
+after(() => { releaseAll(); globalThis.fetch = realFetch; });
 
 // A real HTTP request, so the mock above cannot swallow it.
 const http = require('node:http');
-const post = (port, path, body) => new Promise((resolve, reject) => {
+const post = (port, path, body, extra) => new Promise((resolve, reject) => {
   const data = JSON.stringify(body);
   const r = http.request({ host: '127.0.0.1', port, path, method: 'POST',
-    headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } },
+    headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), ...extra } },
     res => { let b = ''; res.on('data', c => b += c); res.on('end', () => resolve({ status: res.statusCode, body: b ? JSON.parse(b) : null })); });
   r.on('error', reject); r.end(data);
 });
@@ -49,20 +54,25 @@ test('a call the busy cap turns away is logged with ok:false and its reason', as
   });
   try {
     holdNode();
-    // Four calls hold the four slots; the fifth is refused by the cap.
+    // Four calls hold the four slots; the fifth and sixth are refused by the cap, one on each door.
     const held = [1, 2, 3, 4].map(() => post(port, '/v1/work', { hash: HASH }));
     await new Promise(r => setTimeout(r, 150));
-    const refused = await post(port, '/v1/work', { hash: HASH });
-    assert.equal(refused.status, 503, 'the fifth call is over the cap');
-    assert.match(refused.body.error, /work server busy/);
+    const free = await post(port, '/v1/work', { hash: HASH });
+    assert.equal(free.status, 503, 'the fifth call is over the cap');
+    assert.match(free.body.error, /work server busy/);
+    // A payment header makes it a paid call: the cap is checked before the charge, so the line must say paid:true.
+    const paidRes = await post(port, '/v1/work', { hash: HASH }, { 'x-nano-payment': 'A'.repeat(64) });
+    assert.equal(paidRes.status, 503, 'the sixth call is over the cap too');
+    assert.match(paidRes.body.error, /work server busy/);
 
     const mine = lines().filter(e => e.hash === HASH && e.kind === 'work' && e.ok === false);
-    assert.equal(mine.length, 1, 'the refused call left exactly one line: ' + JSON.stringify(mine));
-    assert.match(mine[0].refused, /work server busy/);
-    assert.equal(mine[0].paid, false);
-    if (release) release();
+    assert.equal(mine.length, 2, 'each refused call left exactly one line: ' + JSON.stringify(mine));
+    for (const e of mine) assert.match(e.refused, /work server busy/);
+    assert.deepEqual(mine.map(e => e.paid).sort(), [false, true], 'the line says which door the hash reached');
+    releaseAll();
     held.forEach(p => p.catch(() => {}));
   } finally {
+    server.closeAllConnections();
     await new Promise(r => server.close(r));
   }
 });
